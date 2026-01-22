@@ -16,6 +16,7 @@ npm run dev
 - Flujo completo en frontend (intake → cola → tareas → auditoría).
 - Ingesta simulada de 277CA, 835 y CSV (ZIP no soportado).
 - Datos ficticios sin PHI; todo se guarda solo en `localStorage`.
+- Vite corre sin `@vitejs/plugin-react`; Fast Refresh puede no estar disponible en este modo.
 
 ## Build
 ```bash
