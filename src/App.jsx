@@ -176,25 +176,19 @@ const score = (c, date, rules) => {
   };
 };
 
-const hydrateClaims = (claims, date, rules) =>
-  claims.map((c) => ({
-    ...c,
-    appeals: c.appeals || [],
-    patientMasked: c.patientMasked || maskName(c.patient),
-    ...score(c, date, rules),
-  }));
-
-const initClaimsById = initClaims.reduce((acc, claim) => {
-  acc[claim.id] = claim;
-  return acc;
-}, {});
-
 const maskName = (name) => {
   if (!name) return '';
   const [first, ...rest] = name.split(' ');
   const maskedRest = rest.map((part) => (part ? `${part[0]}***` : '')).join(' ');
   return `${first[0]}***${maskedRest ? ` ${maskedRest}` : ''}`;
 };
+
+const hydrateClaims = (claims, date, rules) =>
+  claims.map((c) => ({
+    ...c,
+    appeals: c.appeals || [],
+    ...score(c, date, rules),
+  }));
 
 
 const getStoredState = () => {
@@ -279,6 +273,8 @@ export default function App() {
   const [stats, setStats] = useState({ proc: 0, app: 0 });
   const [rules, setRules] = useState(defaultRules);
   const [demoMode, setDemoMode] = useState(true);
+  const [showTour, setShowTour] = useState(false);
+  const [tourStep, setTourStep] = useState(0);
 
   useEffect(() => {
     const stored = getStoredState();
@@ -287,12 +283,7 @@ export default function App() {
       setStats(stored.stats || { proc: 0, app: 0 });
       setDemoMode(stored.demoMode ?? true);
       if (stored.date) setDate(new Date(stored.date));
-      const restoredClaims = (stored.claims || initClaims).map((claim) => ({
-        ...claim,
-        patient: initClaimsById[claim.id]?.patient || claim.patient,
-        patientMasked: claim.patientMasked || maskName(initClaimsById[claim.id]?.patient || claim.patient),
-      }));
-      const seeded = hydrateClaims(restoredClaims, stored.date || date, stored.rules || defaultRules);
+      const seeded = hydrateClaims(stored.claims || initClaims, stored.date || date, stored.rules || defaultRules);
       setClaims(seeded);
       setAudit(
         stored.audit || [
@@ -318,6 +309,14 @@ export default function App() {
         }),
       ]);
     }
+
+    if (typeof window !== 'undefined') {
+      const seen = window.localStorage.getItem('dz_tour_seen');
+      if (!seen) {
+        setShowTour(true);
+        window.localStorage.setItem('dz_tour_seen', 'true');
+      }
+    }
   }, []);
 
   useEffect(() => {
@@ -332,14 +331,9 @@ export default function App() {
 
   useEffect(() => {
     if (!claims.length) return;
-    const claimsForStorage = claims.map((claim) => ({
-      ...claim,
-      patient: claim.patientMasked || maskName(claim.patient),
-      patientMasked: claim.patientMasked || maskName(claim.patient),
-    }));
     persistState({
       version: STORAGE_VERSION,
-      claims: claimsForStorage,
+      claims,
       audit,
       stats,
       date: date.toISOString(),
@@ -389,7 +383,7 @@ export default function App() {
     if (sel?.id === id) setSel(updated);
     setStats((prev) => ({ proc: prev.proc + 1, app: status === 'appealed' ? prev.app + 1 : prev.app }));
     logAudit({
-      action: `Estado→${status}`,
+      action: `Usuario cambió estado a ${status}`,
       claimId: id,
       detail: `Prio:${updated.prio}`,
       source: 'user',
@@ -411,7 +405,7 @@ export default function App() {
     setSel(rescored);
     setStats((prev) => ({ proc: prev.proc + 1, app: prev.app + 1 }));
     logAudit({
-      action: 'Apelación generada',
+      action: 'Usuario generó apelación demo',
       claimId: claim.id,
       detail: appealEntry.id,
       source: 'user',
@@ -425,7 +419,7 @@ export default function App() {
     const apiUrl = import.meta.env.VITE_APPEAL_API_URL;
     const publicToken = import.meta.env.VITE_APPEAL_PUBLIC_TOKEN;
     const startedAt = performance.now();
-    const patientName = demoMode ? claim.patientMasked || maskName(claim.patient) : claim.patient;
+    const patientName = demoMode ? maskName(claim.patient) : claim.patient;
     if (!apiUrl || !publicToken) {
       const fallbackText = `APELACIÓN ${claim.id}
 Para: ${claim.payer}
@@ -439,7 +433,7 @@ Prob: ${claim.prob}%
 
 [Modo demo: agrega un token público para generar texto real.]`;
       logAudit({
-        action: 'AI apelación',
+        action: 'Sistema generó borrador de apelación (demo)',
         claimId: claim.id,
         detail: 'Fallback local',
         source: 'system',
@@ -479,7 +473,7 @@ Paciente: ${patientName}
 
 [Fallback: servicio no disponible (${response.status}).]`;
       logAudit({
-        action: 'AI apelación',
+        action: 'Sistema intentó generar apelación',
         claimId: claim.id,
         detail: `Error ${response.status}`,
         source: 'system',
@@ -496,7 +490,7 @@ Paciente: ${patientName}
     const modelVersion = data.modelVersion || data.model || APPEAL_MODEL_VERSION;
     const requestId = data.requestId || data.id || `req-${Date.now()}`;
     logAudit({
-      action: 'AI apelación',
+      action: 'Sistema generó borrador de apelación',
       claimId: claim.id,
       detail: 'Generación OK',
       source: 'system',
@@ -529,31 +523,98 @@ Paciente: ${patientName}
     next.setDate(next.getDate() + 1);
     setDate(next);
     logAudit({
-      action: 'Día+1',
+      action: 'Sistema avanzó el día',
       claimId: 'SYS',
       detail: next.toLocaleDateString(),
       source: 'system',
       before: { simDate: date.toLocaleDateString() },
       after: { simDate: next.toLocaleDateString() },
     });
+    logAudit({
+      action: 'Sistema recalculó scoring',
+      claimId: 'ALL',
+      detail: 'Re-score diario',
+      source: 'system',
+    });
   };
 
-    const filtered = claims
+  const filtered = claims
     .filter(
       (c) =>
-        ((demoMode ? (c.patientMasked || '').toLowerCase() : c.patient.toLowerCase()).includes(search.toLowerCase()) ||
+        ((c.patient.toLowerCase().includes(search.toLowerCase()) ||
+          maskName(c.patient).toLowerCase().includes(search.toLowerCase()) ||
           c.id.toLowerCase().includes(search.toLowerCase())) &&
-        (filter === 'all' || c.status === filter)
+          (filter === 'all' || c.status === filter))
     )
     .sort((a, b) => b.prio - a.prio);
 
-  const displayName = (claim) => (demoMode ? claim.patientMasked || maskName(claim.patient) : claim.patient);
+  const displayName = (claim) => (demoMode ? maskName(claim.patient) : claim.patient);
 
   const resetStorage = () => {
     if (typeof window !== 'undefined') {
       window.localStorage.removeItem(STORAGE_KEY);
+      window.localStorage.removeItem('dz_tour_seen');
       window.location.reload();
     }
+  };
+
+  const tourSteps = [
+    {
+      id: 'nav-denials',
+      title: '1. Cola priorizada',
+      body: 'Aquí aparece el backlog ordenado por prioridad y probabilidad de recuperación.',
+    },
+    {
+      id: 'denial-detail',
+      title: '2. Detalle del denial',
+      body: 'Al abrir un denial ves el monto, la razón y la acción sugerida.',
+    },
+    {
+      id: 'tour-appeal',
+      title: '3. Borrador de apelación',
+      body: 'Genera un borrador demo con un clic y deja rastro en auditoría.',
+    },
+    {
+      id: 'nav-audit',
+      title: '4. Auditoría',
+      body: 'Cada cambio queda registrado con usuario, hora y explicación.',
+    },
+    {
+      id: 'nav-how',
+      title: '5. Cómo funciona',
+      body: 'Explica el flujo de punta a punta con palabras simples.',
+    },
+  ];
+
+  const currentTour = tourSteps[tourStep];
+  const tourTarget = currentTour ? document.getElementById(currentTour.id) : null;
+  const tourRect = tourTarget?.getBoundingClientRect();
+
+  const runQuickTour = () => {
+    const top = [...claims].sort((a, b) => b.prio - a.prio)[0];
+    if (!top) return;
+    setView('denials');
+    setSel(top);
+    logAudit({
+      action: 'Recorrido rápido iniciado',
+      claimId: top.id,
+      detail: 'Mostrando flujo completo',
+      source: 'system',
+    });
+    updateStatus(top.id, 'in_progress');
+    const appealEntry = {
+      id: `APL-${Date.now().toString().slice(-4)}`,
+      createdAt: new Date().toISOString(),
+      status: 'submitted',
+      summary: 'Apelación demo generada',
+    };
+    applyAppeal(top, appealEntry);
+    logAudit({
+      action: 'Recorrido rápido completado',
+      claimId: top.id,
+      detail: 'Estado y apelación actualizados',
+      source: 'system',
+    });
   };
 
   const priorityClass = (prio) =>
@@ -589,9 +650,11 @@ Paciente: ${patientName}
             ['denials', AlertCircle, 'Denials'],
             ['payments', DollarSign, 'Pagos'],
             ['audit', History, 'Auditoría'],
+            ['how', FileText, 'Cómo funciona'],
           ].map(([id, Icon, label]) => (
             <button
               key={id}
+              id={`nav-${id}`}
               onClick={() => {
                 setView(id);
                 setSel(null);
@@ -614,7 +677,15 @@ Paciente: ${patientName}
       <div className="flex-1 flex flex-col overflow-hidden">
         <header className="h-8 bg-white border-b flex items-center justify-between px-2">
           <span className="font-semibold">
-            {view === 'dashboard' ? 'Dashboard' : view === 'denials' ? 'Denials' : view === 'payments' ? 'Pagos' : 'Auditoría'}
+            {view === 'dashboard'
+              ? 'Dashboard'
+              : view === 'denials'
+                ? 'Denials'
+                : view === 'payments'
+                  ? 'Pagos'
+                  : view === 'how'
+                    ? 'Cómo funciona'
+                    : 'Auditoría'}
           </span>
           <div className="flex items-center gap-2">
             <span className="bg-slate-100 px-1.5 py-0.5 rounded flex items-center gap-1">
@@ -624,6 +695,22 @@ Paciente: ${patientName}
                 <RefreshCw className="w-3 h-3" />
               </button>
             </span>
+            <button
+              id="quick-tour-btn"
+              onClick={runQuickTour}
+              className="px-2 py-0.5 rounded border bg-white hover:bg-slate-50 text-slate-600"
+            >
+              Recorrido rápido
+            </button>
+            <button
+              onClick={() => {
+                setTourStep(0);
+                setShowTour(true);
+              }}
+              className="px-2 py-0.5 rounded border bg-white hover:bg-slate-50 text-slate-600"
+            >
+              Tour
+            </button>
             <div className="flex items-center gap-1 text-[10px] text-slate-500">
               <span>Demo PHI</span>
               <button
@@ -646,13 +733,20 @@ Paciente: ${patientName}
               <div className="grid grid-cols-5 gap-1">
                 {[
                   ['Total', metrics.total],
-                  ['Hi-Prio', metrics.highPrio],
+                  ['Hi-Prio', metrics.highPrio, 'Prioridad demo según monto, antigüedad y reglas del pagador.'],
                   ['$Pend', `$${(metrics.amount / 1000).toFixed(0)}K`],
-                  ['Prob%', `${metrics.avgProb}%`],
+                  ['Prob%', `${metrics.avgProb}%`, 'Probabilidad demo basada en recuperación histórica y estado.'],
                   ['Proc', stats.proc],
-                ].map(([label, value]) => (
+                ].map(([label, value, hint]) => (
                   <div key={label} className="bg-white rounded p-1.5 border text-center">
-                    <p className="text-slate-500">{label}</p>
+                    <p className="text-slate-500">
+                      {label}
+                      {hint ? (
+                        <span className="ml-1 text-slate-400" title={hint}>
+                          ⓘ
+                        </span>
+                      ) : null}
+                    </p>
                     <p className="font-bold">{value}</p>
                   </div>
                 ))}
@@ -718,6 +812,29 @@ Paciente: ${patientName}
                     <span className="text-slate-400">{entry.ts}</span>
                   </div>
                 ))}
+              </div>
+              <div className="bg-white rounded p-2 border" id="help-panel">
+                <span className="font-semibold">Ayuda rápida</span>
+                <div className="mt-1 space-y-1 text-slate-600">
+                  <p>
+                    <strong>Claim:</strong> factura enviada al pagador.
+                  </p>
+                  <p>
+                    <strong>Denial:</strong> rechazo total o parcial del pago.
+                  </p>
+                  <p>
+                    <strong>Prioridad:</strong> fórmula demo con monto, antigüedad y reglas.
+                  </p>
+                  <p>
+                    <strong>Probabilidad:</strong> chance estimada de recuperación.
+                  </p>
+                  <p>
+                    <strong>Apelación:</strong> borrador editable para solicitar revisión.
+                  </p>
+                  <p>
+                    <strong>Auditoría:</strong> registro de acciones y cambios.
+                  </p>
+                </div>
               </div>
             </div>
           )}
@@ -801,7 +918,7 @@ Paciente: ${patientName}
                       <X className="w-3 h-3" />
                     </button>
                   </div>
-                  <div className="flex-1 overflow-auto p-2 space-y-2">
+                  <div className="flex-1 overflow-auto p-2 space-y-2" id="denial-detail">
                     <div className="p-2 bg-slate-800 text-white rounded flex justify-between">
                       <div>
                         <p className="text-slate-400">Monto</p>
@@ -844,9 +961,13 @@ Paciente: ${patientName}
                         Días: {sel.inputs.days} | Amt: {sel.inputs.amt} | Age: {sel.inputs.age} | Pen:{' '}
                         {sel.inputs.pen}
                       </p>
+                      <p className="text-slate-400 text-[10px]">
+                        Demo: fórmula basada en monto, antigüedad, reglas del pagador y tipo de denial.
+                      </p>
                     </div>
                     <div className="flex gap-1">
                       <button
+                        id="tour-appeal"
                         onClick={() => openAppealModal(sel)}
                         className="flex-1 bg-emerald-600 text-white py-1 rounded hover:bg-emerald-700 flex items-center justify-center gap-1"
                       >
@@ -987,6 +1108,39 @@ Paciente: ${patientName}
               ))}
             </div>
           )}
+
+          {view === 'how' && (
+            <div className="space-y-2">
+              <div className="bg-white rounded p-2 border">
+                <h2 className="font-semibold">Cómo funciona Denials Zero Desk</h2>
+                <p className="text-slate-600 mt-1">
+                  Flujo simple pensado para equipos no técnicos: cargar denials, priorizar, ejecutar acciones y dejar trazabilidad.
+                </p>
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                {[
+                  { title: '1. Llegada de denials', body: 'El equipo sube archivos o integra un envío diario. La cola se llena sola.' },
+                  { title: '2. Priorización', body: 'El sistema ordena por monto, antigüedad y reglas del pagador.' },
+                  { title: '3. Acción y apelación', body: 'Se aplican pasos sugeridos y se genera un borrador de apelación.' },
+                ].map((card) => (
+                  <div key={card.title} className="bg-white rounded p-2 border">
+                    <p className="font-semibold">{card.title}</p>
+                    <p className="text-slate-600 mt-1">{card.body}</p>
+                  </div>
+                ))}
+              </div>
+              <div className="bg-white rounded p-2 border">
+                <p className="font-semibold">Piloto sin integraciones</p>
+                <p className="text-slate-600 mt-1">
+                  El cliente exporta archivos de su sistema y los sube manualmente. En minutos ve la cola priorizada y acciones sugeridas.
+                </p>
+                <p className="font-semibold mt-2">Producción con integración ligera</p>
+                <p className="text-slate-600 mt-1">
+                  Se automatiza el envío diario de archivos. El equipo sigue trabajando igual, solo que la cola se actualiza sola.
+                </p>
+              </div>
+            </div>
+          )}
         </main>
       </div>
 
@@ -1022,6 +1176,50 @@ Paciente: ${patientName}
               >
                 Enviar
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showTour && currentTour && (
+        <div className="fixed inset-0 z-50">
+          <div className="absolute inset-0 bg-black/60" />
+          {tourRect ? (
+            <div
+              className="absolute border-2 border-emerald-400 rounded pointer-events-none"
+              style={{
+                top: `${tourRect.top - 6}px`,
+                left: `${tourRect.left - 6}px`,
+                width: `${tourRect.width + 12}px`,
+                height: `${tourRect.height + 12}px`,
+              }}
+            />
+          ) : null}
+          <div className="absolute bottom-6 left-1/2 -translate-x-1/2 bg-white rounded shadow-lg p-4 w-full max-w-md">
+            <p className="font-semibold">{currentTour.title}</p>
+            <p className="text-slate-600 mt-1">{currentTour.body}</p>
+            <div className="flex justify-between mt-3 text-sm">
+              <button onClick={() => setShowTour(false)} className="px-2 py-1 border rounded">
+                Cerrar
+              </button>
+              <div className="flex gap-2">
+                <button onClick={() => setTourStep((prev) => Math.max(prev - 1, 0))} className="px-2 py-1 border rounded">
+                  Atrás
+                </button>
+                <button
+                  onClick={() => {
+                    if (tourStep >= tourSteps.length - 1) {
+                      setShowTour(false);
+                      setTourStep(0);
+                    } else {
+                      setTourStep((prev) => prev + 1);
+                    }
+                  }}
+                  className="px-2 py-1 bg-emerald-600 text-white rounded"
+                >
+                  {tourStep >= tourSteps.length - 1 ? 'Finalizar' : 'Siguiente'}
+                </button>
+              </div>
             </div>
           </div>
         </div>
