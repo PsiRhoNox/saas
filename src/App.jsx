@@ -17,9 +17,10 @@ import {
   X,
   Zap,
 } from 'lucide-react';
+import JSZip from 'jszip';
 
 const STORAGE_KEY = 'denialsZeroDesk';
-const STORAGE_VERSION = 3;
+const STORAGE_VERSION = 4;
 const SCORING_VERSION = 'v1.2';
 const APPEAL_MODEL_VERSION = 'demo-fallback-v1';
 
@@ -45,6 +46,10 @@ const defaultRules = {
 const initClaims = [
   {
     id: 'CLM-001',
+    payerClaimNumber: 'PCN-1001',
+    patientControlNumber: 'PAT-1001',
+    trackingNumber: 'TRK-1001',
+    needsReview: false,
     patient: 'Maria Garcia',
     payer: 'Blue Cross',
     amount: 4250,
@@ -61,6 +66,10 @@ const initClaims = [
   },
   {
     id: 'CLM-002',
+    payerClaimNumber: 'PCN-1002',
+    patientControlNumber: 'PAT-1002',
+    trackingNumber: 'TRK-1002',
+    needsReview: false,
     patient: 'John Davis',
     payer: 'Aetna',
     amount: 8750,
@@ -77,6 +86,10 @@ const initClaims = [
   },
   {
     id: 'CLM-003',
+    payerClaimNumber: 'PCN-1003',
+    patientControlNumber: 'PAT-1003',
+    trackingNumber: 'TRK-1003',
+    needsReview: false,
     patient: 'Sarah Wilson',
     payer: 'United',
     amount: 2100,
@@ -93,6 +106,10 @@ const initClaims = [
   },
   {
     id: 'CLM-004',
+    payerClaimNumber: 'PCN-1004',
+    patientControlNumber: 'PAT-1004',
+    trackingNumber: 'TRK-1004',
+    needsReview: false,
     patient: 'Robert Chen',
     payer: 'Cigna',
     amount: 12500,
@@ -109,6 +126,10 @@ const initClaims = [
   },
   {
     id: 'CLM-005',
+    payerClaimNumber: 'PCN-1005',
+    patientControlNumber: 'PAT-1005',
+    trackingNumber: 'TRK-1005',
+    needsReview: false,
     patient: 'Emily Brown',
     payer: 'Humana',
     amount: 3200,
@@ -125,6 +146,10 @@ const initClaims = [
   },
   {
     id: 'CLM-006',
+    payerClaimNumber: 'PCN-1006',
+    patientControlNumber: 'PAT-1006',
+    trackingNumber: 'TRK-1006',
+    needsReview: false,
     patient: 'Michael Torres',
     payer: 'Blue Cross',
     amount: 6800,
@@ -190,6 +215,63 @@ const hydrateClaims = (claims, date, rules) =>
     appeals: c.appeals || [],
     ...score(c, date, rules),
   }));
+
+const CSV_FIELDS = [
+  'claimId',
+  'payerClaimNumber',
+  'patientControlNumber',
+  'trackingNumber',
+  'denialCode',
+  'denialReason',
+  'amount',
+  'status',
+];
+
+const CSV_FIELD_LABELS = {
+  claimId: 'Claim ID (obligatorio)',
+  payerClaimNumber: 'Payer Claim #',
+  patientControlNumber: 'Patient Control #',
+  trackingNumber: 'Tracking #',
+  denialCode: 'Denial/Reason Code',
+  denialReason: 'Denial Reason',
+  amount: 'Monto',
+  status: 'Status',
+};
+
+const CSV_FIELD_ALIASES = {
+  claimId: ['claim_id', 'claim', 'external_id', 'id'],
+  payerClaimNumber: ['payer_claim_number', 'payer_claim', 'payerclaim'],
+  patientControlNumber: ['patient_control_number', 'patient_control', 'pcn'],
+  trackingNumber: ['tracking_number', 'tracking', 'trn'],
+  denialCode: ['denial_code', 'reason_code', 'cas_code', 'code'],
+  denialReason: ['denial_reason', 'reason', 'description'],
+  amount: ['amount', 'denied_amount', 'charge_amount'],
+  status: ['status', 'claim_status'],
+};
+
+const normalizeHeader = (value) => value.trim().toLowerCase().replace(/\s+/g, '_');
+
+const parseCsvLine = (line) => {
+  const result = [];
+  let current = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i += 1) {
+    const char = line[i];
+    if (char === '"' && line[i + 1] === '"') {
+      current += '"';
+      i += 1;
+    } else if (char === '"') {
+      inQuotes = !inQuotes;
+    } else if (char === ',' && !inQuotes) {
+      result.push(current);
+      current = '';
+    } else {
+      current += char;
+    }
+  }
+  result.push(current);
+  return result.map((cell) => cell.trim());
+};
 
 
 const getStoredState = () => {
@@ -276,7 +358,13 @@ export default function App() {
   const [demoMode, setDemoMode] = useState(true);
   const [showTour, setShowTour] = useState(false);
   const [tourStep, setTourStep] = useState(0);
-  const [uploads, setUploads] = useState([]);
+  const [ingestionRuns, setIngestionRuns] = useState([]);
+  const [pendingMappings, setPendingMappings] = useState({});
+  const [mappingDrafts, setMappingDrafts] = useState({});
+  const [activeRunId, setActiveRunId] = useState(null);
+  const [awaitingInboxRedirect, setAwaitingInboxRedirect] = useState(false);
+  const [tutorialStepIndex, setTutorialStepIndex] = useState(0);
+  const [ingestionDetail, setIngestionDetail] = useState(null);
   const [needsReview, setNeedsReview] = useState([]);
   const [unmatched, setUnmatched] = useState([]);
   const [triageResults, setTriageResults] = useState({});
@@ -288,11 +376,11 @@ export default function App() {
       host: 'sftp.demo-clearinghouse.com',
       user: 'demo-user',
       path: '/inbox',
-      schedule: 'Cada 6 horas',
-      timezone: 'UTC-5',
-      lastPull: '2024-01-21 06:00',
-      lastFile: '277ca_20240121.edi',
-      errors: 1,
+      schedule: 'Pendiente',
+      timezone: 'Pendiente',
+      lastPull: 'Pendiente',
+      lastFile: '-',
+      errors: 0,
     },
   ]);
 
@@ -302,7 +390,11 @@ export default function App() {
       setRules(stored.rules || defaultRules);
       setStats(stored.stats || { proc: 0, app: 0 });
       setDemoMode(stored.demoMode ?? true);
-      setUploads(stored.uploads || []);
+      setIngestionRuns(stored.ingestionRuns || []);
+      setPendingMappings(stored.pendingMappings || {});
+      setMappingDrafts(stored.mappingDrafts || {});
+      setActiveRunId(stored.activeRunId || null);
+      setAwaitingInboxRedirect(stored.awaitingInboxRedirect || false);
       setNeedsReview(stored.needsReview || []);
       setUnmatched(stored.unmatched || []);
       setTriageResults(stored.triageResults || {});
@@ -365,14 +457,35 @@ export default function App() {
       date: date.toISOString(),
       rules,
       demoMode,
-      uploads,
+      ingestionRuns,
+      pendingMappings,
+      mappingDrafts,
+      activeRunId,
+      awaitingInboxRedirect,
       needsReview,
       unmatched,
       triageResults,
       tasks,
       integrations,
     });
-  }, [claims, audit, stats, date, rules, demoMode, uploads, needsReview, unmatched, triageResults, tasks, integrations]);
+  }, [
+    claims,
+    audit,
+    stats,
+    date,
+    rules,
+    demoMode,
+    ingestionRuns,
+    pendingMappings,
+    mappingDrafts,
+    activeRunId,
+    awaitingInboxRedirect,
+    needsReview,
+    unmatched,
+    triageResults,
+    tasks,
+    integrations,
+  ]);
 
   const metrics = useMemo(() => {
     const totalAmount = claims.reduce((sum, claim) => sum + claim.amount, 0);
@@ -386,6 +499,21 @@ export default function App() {
       highPrio: claims.filter((c) => c.prio >= 70).length,
     };
   }, [claims]);
+
+  const tutorialSteps = [
+    {
+      title: '1. El cliente ya recibe 277CA y 835',
+      body: 'El clearinghouse o pagador envía estos archivos al cliente. Aquí no inventamos integraciones: solo los subes o los lees vía SFTP.',
+    },
+    {
+      title: '2. Orden recomendado',
+      body: 'Primero sube 277CA para conocer el estatus y tracking; luego 835 para ajustes CAS y montos. Ejemplo: 277CA → 835.',
+    },
+    {
+      title: '3. Resultado visible',
+      body: 'La ingestión crea o actualiza claims, genera denials con códigos y deja historial por archivo. Luego revisas la Denials Inbox.',
+    },
+  ];
 
   const logAudit = ({ action, claimId, detail, source, before, after, scoring, aiDecision, modelVersion, requestId, latencyMs, result }) => {
     const entry = buildAuditEntry({
@@ -408,41 +536,120 @@ export default function App() {
 
   const detectEdiType = (fileName, content) => {
     const upper = `${fileName} ${content}`.toUpperCase();
+    if (fileName.toLowerCase().endsWith('.csv')) return 'CSV';
     if (upper.includes('835') || upper.includes('BPR') || upper.includes('CLP')) return '835';
     if (upper.includes('277') || upper.includes('STC')) return '277CA';
     return 'unknown';
   };
 
   const parse835 = (content) => {
-    const claimsParsed = [];
-    const regex = /CLP\*([^*]+)\*[^*]*\*([0-9.]+)\*([0-9.]+)\*([0-9.]+)\*/g;
-    let match = regex.exec(content);
-    while (match) {
-      const [_, externalId, charged, paid, patientResp] = match;
-      claimsParsed.push({
-        externalId,
-        charged: Number(charged),
-        paid: Number(paid),
-        patientResp: Number(patientResp),
-      });
-      match = regex.exec(content);
-    }
-    return claimsParsed;
+    const segments = content.replace(/\r/g, '').split('~').map((s) => s.trim()).filter(Boolean);
+    const rows = [];
+    const errors = [];
+    let currentClaim = null;
+    segments.forEach((segment, index) => {
+      const parts = segment.split('*');
+      const tag = parts[0];
+      if (tag === 'CLP') {
+        if (!parts[1]) {
+          errors.push({ line: index + 1, message: 'CLP sin identificador de claim' });
+        }
+        currentClaim = {
+          payerClaimNumber: parts[1] || '',
+          patientControlNumber: parts[7] || '',
+          trackingNumber: '',
+          charged: Number(parts[3] || 0),
+          paid: Number(parts[4] || 0),
+          patientResp: Number(parts[5] || 0),
+          adjustments: [],
+        };
+        rows.push(currentClaim);
+      }
+      if (tag === 'TRN' && parts[1] === '1' && currentClaim) {
+        currentClaim.trackingNumber = parts[2] || '';
+      }
+      if (tag === 'CAS' && currentClaim) {
+        const groupCode = parts[1];
+        for (let i = 2; i < parts.length; i += 3) {
+          const reasonCode = parts[i];
+          const amount = Number(parts[i + 1] || 0);
+          if (!reasonCode) continue;
+          currentClaim.adjustments.push({ groupCode, reasonCode, amount });
+        }
+      }
+    });
+    return { rows, errors };
   };
 
   const parse277 = (content) => {
-    const claimsParsed = [];
-    const regex = /TRN\*1\*([^~*\n\r]+)[^~]*~?[^~]*STC\*([^*~]+)/g;
-    let match = regex.exec(content);
-    while (match) {
-      const [_, externalId, status] = match;
-      claimsParsed.push({
-        externalId,
-        status,
-      });
-      match = regex.exec(content);
+    const segments = content.replace(/\r/g, '').split('~').map((s) => s.trim()).filter(Boolean);
+    const rows = [];
+    const errors = [];
+    let trackingNumber = '';
+    let patientControlNumber = '';
+    segments.forEach((segment, index) => {
+      const parts = segment.split('*');
+      const tag = parts[0];
+      if (tag === 'TRN' && parts[1] === '1') {
+        trackingNumber = parts[2] || '';
+      }
+      if (tag === 'REF' && parts[1] === '1K') {
+        patientControlNumber = parts[2] || '';
+      }
+      if (tag === 'STC') {
+        const status = parts[1] || '';
+        if (!status) {
+          errors.push({ line: index + 1, message: 'STC sin status' });
+        }
+        rows.push({
+          status,
+          trackingNumber,
+          patientControlNumber,
+        });
+      }
+    });
+    return { rows, errors };
+  };
+
+  const detectCsvMapping = (headers) => {
+    if (!headers?.length) return {};
+    const normalized = headers.map((header) => normalizeHeader(header));
+    const mapping = {};
+    CSV_FIELDS.forEach((field) => {
+      const alias = CSV_FIELD_ALIASES[field].find((option) => normalized.includes(option));
+      if (alias) {
+        mapping[field] = headers[normalized.indexOf(alias)];
+      }
+    });
+    return mapping;
+  };
+
+  const parseCsv = (content, mapping) => {
+    const lines = content.replace(/\r/g, '').split('\n').filter((line) => line.trim().length);
+    const errors = [];
+    if (lines.length < 2) {
+      return { rows: [], errors: [{ line: 1, message: 'CSV sin filas de datos' }] };
     }
-    return claimsParsed;
+    const headers = parseCsvLine(lines[0]);
+    const headerIndex = Object.fromEntries(headers.map((header, idx) => [header, idx]));
+    const rows = [];
+    for (let i = 1; i < lines.length; i += 1) {
+      const line = lines[i];
+      const cells = parseCsvLine(line);
+      const row = {};
+      CSV_FIELDS.forEach((field) => {
+        const column = mapping?.[field];
+        if (!column) return;
+        const index = headerIndex[column];
+        row[field] = index !== undefined ? cells[index] : '';
+      });
+      if (!row.claimId && !row.payerClaimNumber && !row.patientControlNumber && !row.trackingNumber) {
+        errors.push({ line: i + 1, message: 'Fila sin identificador de claim' });
+        continue;
+      }
+      rows.push(row);
+    }
+    return { rows, errors, headers };
   };
 
   const runTriage = (denial, claim) => {
@@ -499,133 +706,445 @@ export default function App() {
     });
   };
 
-  const handleUploadFiles = async (fileList) => {
+  const findClaimMatch = (list, identifiers) =>
+    list.find(
+      (c) =>
+        (identifiers.payerClaimNumber && c.payerClaimNumber === identifiers.payerClaimNumber) ||
+        (identifiers.patientControlNumber && c.patientControlNumber === identifiers.patientControlNumber) ||
+        (identifiers.trackingNumber && c.trackingNumber === identifiers.trackingNumber)
+    );
+
+  const createNewClaim = (identifier, amount, fallbackIndex, sourceLabel) => {
+    const safeSource = sourceLabel ? sourceLabel.replace(/[^a-zA-Z0-9]/g, '').slice(0, 6) : 'FILE';
+    const externalId = identifier || `EXT-${safeSource}-${fallbackIndex + 1}`;
+    const base = {
+      id: externalId,
+      payerClaimNumber: identifier || '',
+      patientControlNumber: '',
+      trackingNumber: '',
+      needsReview: true,
+      patient: demoMode ? 'Paciente Nuevo' : 'Paciente Nuevo',
+      payer: 'Blue Cross',
+      amount: amount || 1200,
+      code: 'CO-11',
+      reason: 'Revisar detalle',
+      status: 'pending',
+      cpt: '99214',
+      dx: 'E11.9',
+      provider: 'Dr. Demo',
+      facility: 'Main Clinic',
+      submitted: date.toISOString().slice(0, 10),
+      denied: date.toISOString().slice(0, 10),
+      appeals: [],
+    };
+    return { ...base, ...score(base, date, rules) };
+  };
+
+  const updateRun = (runId, updater) => {
+    setIngestionRuns((prev) => prev.map((run) => (run.id === runId ? updater(run) : run)));
+  };
+
+  const expandFiles = async (fileList) => {
     const files = Array.from(fileList);
+    const expanded = [];
     for (const file of files) {
       if (!file.name) continue;
-      const content = await file.text();
-      const type = detectEdiType(file.name, content);
-      const uploadId = `${Date.now()}-${file.name}`;
-      const baseUpload = {
-        id: uploadId,
-        name: file.name,
-        type,
-        receivedAt: new Date().toISOString(),
-        status: 'received',
-        warnings: [],
-      };
-      setUploads((prev) => [baseUpload, ...prev]);
-      logAudit({
-        action: 'Archivo recibido',
-        claimId: 'INGEST',
-        detail: `${file.name} (${type})`,
-        source: 'system',
-      });
-
-      if (type === 'unknown') {
-        setNeedsReview((prev) => [
-          { id: uploadId, name: file.name, reason: 'Tipo no reconocido', receivedAt: baseUpload.receivedAt },
-          ...prev,
-        ]);
-        setUploads((prev) => prev.map((u) => (u.id === uploadId ? { ...u, status: 'needs_review' } : u)));
-        logAudit({
-          action: 'Archivo requiere revisión',
-          claimId: 'INGEST',
-          detail: file.name,
-          source: 'system',
-        });
-        continue;
-      }
-
-      setUploads((prev) => prev.map((u) => (u.id === uploadId ? { ...u, status: 'parsed' } : u)));
-      const parsedClaims = type === '835' ? parse835(content) : parse277(content);
-      if (!parsedClaims.length) {
-        setNeedsReview((prev) => [
-          { id: uploadId, name: file.name, reason: 'Sin datos reconocibles', receivedAt: baseUpload.receivedAt },
-          ...prev,
-        ]);
-        setUploads((prev) => prev.map((u) => (u.id === uploadId ? { ...u, status: 'needs_review' } : u)));
-        continue;
-      }
-
-      const createdDenials = [];
-      const unmatchedItems = [];
-      setClaims((prev) => {
-        const updated = [...prev];
-        parsedClaims.forEach((row) => {
-          const existing = updated.find((c) => c.id === row.externalId);
-          if (existing) {
-            existing.amount = row.charged ? row.charged : existing.amount;
-            existing.status = existing.status || 'pending';
-            if (type === '277CA') {
-              createdDenials.push(existing.id);
-            }
-            return;
-          }
-          if (type === '277CA') {
-            unmatchedItems.push({
-              id: row.externalId,
-              suggestion: 'Revisar patient control number',
-              reason: 'Claim no encontrado',
+      if (file.name.toLowerCase().endsWith('.zip')) {
+        try {
+          const zip = await JSZip.loadAsync(file);
+          const entries = Object.values(zip.files).filter((entry) => !entry.dir);
+          for (const entry of entries) {
+            const content = await entry.async('string');
+            expanded.push({
+              id: `${file.name}-${entry.name}-${Date.now()}`,
+              name: entry.name,
+              sourceName: file.name,
+              content,
             });
-            return;
           }
-          const newClaim = {
-            id: row.externalId,
-            patient: demoMode ? 'Paciente Demo' : 'Paciente Nuevo',
-            payer: 'Blue Cross',
-            amount: row.charged || 1200,
-            code: 'CO-11',
-            reason: 'Dx inconsistente',
-            status: 'pending',
-            cpt: '99214',
-            dx: 'E11.9',
-            provider: 'Dr. Demo',
-            facility: 'Main Clinic',
-            submitted: date.toISOString().slice(0, 10),
-            denied: date.toISOString().slice(0, 10),
-            appeals: [],
-          };
-          updated.push({ ...newClaim, ...score(newClaim, date, rules) });
-        });
-        return updated.map((c) => ({ ...c, ...score(c, date, rules) }));
-      });
-
-      if (unmatchedItems.length) {
-        setUnmatched((prev) => [...unmatchedItems, ...prev]);
+        } catch (error) {
+          expanded.push({
+            id: `${file.name}-${Date.now()}`,
+            name: file.name,
+            sourceName: null,
+            content: '',
+            zipError: `No se pudo abrir el zip: ${error.message}`,
+          });
+        }
+      } else {
+        const content = await file.text();
+        expanded.push({ id: `${file.name}-${Date.now()}`, name: file.name, sourceName: null, content });
       }
-
-      const newTriage = {};
-      createdDenials.forEach((denialId) => {
-        const claim = claims.find((c) => c.id === denialId) || initClaims.find((c) => c.id === denialId);
-        if (!claim) return;
-        newTriage[denialId] = runTriage(claim, claim);
-      });
-      if (Object.keys(newTriage).length) {
-        setTriageResults((prev) => ({ ...prev, ...newTriage }));
-      }
-
-      setUploads((prev) => prev.map((u) => (u.id === uploadId ? { ...u, status: 'triaged' } : u)));
-      logAudit({
-        action: 'Archivo procesado',
-        claimId: 'INGEST',
-        detail: `${file.name} → ${type}`,
-        source: 'system',
-      });
     }
+    return expanded;
+  };
+
+  const processFileEntry = async (runId, fileEntry, fileIndex, mappingOverride = null) => {
+    updateRun(runId, (run) => ({
+      ...run,
+      status: 'processing',
+      files: run.files.map((f) => (f.id === fileEntry.id ? { ...f, status: 'processing' } : f)),
+    }));
+
+    if (fileEntry.zipError) {
+      updateRun(runId, (run) => ({
+        ...run,
+        files: run.files.map((f) =>
+          f.id === fileEntry.id
+            ? {
+                ...f,
+                status: 'error',
+                errors: [{ line: '-', message: fileEntry.zipError }],
+              }
+            : f
+        ),
+      }));
+      setNeedsReview((prev) => [
+        { id: fileEntry.id, name: fileEntry.name, reason: fileEntry.zipError, receivedAt: fileEntry.receivedAt },
+        ...prev,
+      ]);
+      return { denialsCreated: 0 };
+    }
+
+    const type = detectEdiType(fileEntry.name, fileEntry.content);
+    if (type === 'unknown') {
+      updateRun(runId, (run) => ({
+        ...run,
+        files: run.files.map((f) =>
+          f.id === fileEntry.id
+            ? { ...f, status: 'error', errors: [{ line: '-', message: 'Tipo no reconocido' }] }
+            : f
+        ),
+      }));
+      setNeedsReview((prev) => [
+        { id: fileEntry.id, name: fileEntry.name, reason: 'Tipo no reconocido', receivedAt: fileEntry.receivedAt },
+        ...prev,
+      ]);
+      return { denialsCreated: 0 };
+    }
+
+    let rows = [];
+    let errors = [];
+    let detectedHeaders = [];
+    let csvMapping = mappingOverride;
+    if (type === '835') {
+      ({ rows, errors } = parse835(fileEntry.content));
+    } else if (type === '277CA') {
+      ({ rows, errors } = parse277(fileEntry.content));
+    } else if (type === 'CSV') {
+      const autoMapping = detectCsvMapping(parseCsvLine(fileEntry.content.split('\n')[0] || ''));
+      csvMapping = csvMapping || autoMapping;
+      const mappingReady =
+        csvMapping?.claimId || csvMapping?.payerClaimNumber || csvMapping?.patientControlNumber || csvMapping?.trackingNumber;
+      if (!mappingReady) {
+        const headerRow = parseCsvLine(fileEntry.content.split('\n')[0] || '');
+        setPendingMappings((prev) => ({
+          ...prev,
+          [fileEntry.id]: { headers: headerRow, runId },
+        }));
+        updateRun(runId, (run) => ({
+          ...run,
+          status: 'waiting_mapping',
+          files: run.files.map((f) =>
+            f.id === fileEntry.id ? { ...f, status: 'needs_mapping', type: 'CSV', headers: headerRow } : f
+          ),
+        }));
+        return { denialsCreated: 0 };
+      }
+      const parsed = parseCsv(fileEntry.content, csvMapping);
+      rows = parsed.rows;
+      errors = parsed.errors;
+      detectedHeaders = parsed.headers || [];
+    }
+
+    if (!rows.length) {
+      updateRun(runId, (run) => ({
+        ...run,
+        files: run.files.map((f) =>
+          f.id === fileEntry.id
+            ? { ...f, status: 'error', errors: errors.length ? errors : [{ line: '-', message: 'Sin datos reconocibles' }] }
+            : f
+        ),
+      }));
+      setNeedsReview((prev) => [
+        { id: fileEntry.id, name: fileEntry.name, reason: 'Sin datos reconocibles', receivedAt: fileEntry.receivedAt },
+        ...prev,
+      ]);
+      return { denialsCreated: 0 };
+    }
+
+    const summary = {
+      claims: rows.length,
+      denials: 0,
+      payments: 0,
+      adjustments: 0,
+      matched: 0,
+      created: 0,
+      needsReview: 0,
+    };
+    const createdDenials = [];
+    const unmatchedItems = [];
+    setClaims((prev) => {
+      const updated = [...prev];
+      rows.forEach((row, index) => {
+        const identifiers = {
+          payerClaimNumber: row.payerClaimNumber || row.claimId || '',
+          patientControlNumber: row.patientControlNumber || '',
+          trackingNumber: row.trackingNumber || '',
+        };
+        const existing = findClaimMatch(updated, identifiers);
+        let target = existing;
+        if (existing) {
+          summary.matched += 1;
+          target.payerClaimNumber = identifiers.payerClaimNumber || target.payerClaimNumber;
+          target.patientControlNumber = identifiers.patientControlNumber || target.patientControlNumber;
+          target.trackingNumber = identifiers.trackingNumber || target.trackingNumber;
+        } else {
+          summary.created += 1;
+          summary.needsReview += 1;
+          const newClaim = createNewClaim(
+            identifiers.payerClaimNumber,
+            row.amount ? Number(row.amount) : 1200,
+            index,
+            fileEntry.name
+          );
+          newClaim.patientControlNumber = identifiers.patientControlNumber;
+          newClaim.trackingNumber = identifiers.trackingNumber;
+          updated.push(newClaim);
+          target = newClaim;
+          unmatchedItems.push({
+            id: newClaim.id,
+            suggestion: 'Revisar patient control number',
+            reason: 'Claim no encontrado, creado como needs review',
+          });
+        }
+
+        if (type === '835') {
+          const denialAdjustments = row.adjustments.filter((adj) => adj.amount > 0);
+          summary.adjustments += denialAdjustments.length;
+          const isDenied = row.paid === 0 || denialAdjustments.some((adj) => ['CO', 'PR', 'PI', 'OA'].includes(adj.groupCode));
+          if (isDenied && denialAdjustments.length) {
+            const primary = denialAdjustments[0];
+            target.code = `${primary.groupCode}-${primary.reasonCode}`;
+            target.reason = `Ajuste ${primary.reasonCode} por $${primary.amount}`;
+            target.status = 'pending';
+            target.denied = date.toISOString().slice(0, 10);
+            summary.denials += 1;
+            createdDenials.push(target.id);
+          }
+          if (row.paid > 0) {
+            summary.payments += 1;
+          }
+          if (row.charged) target.amount = row.charged;
+        }
+
+        if (type === '277CA') {
+          const denialStatus = row.status || '';
+          const isDenied =
+            denialStatus.startsWith('A1') ||
+            denialStatus.startsWith('A7') ||
+            denialStatus.startsWith('R') ||
+            denialStatus.startsWith('E');
+          if (isDenied) {
+            target.code = `277-${denialStatus.split(':')[0]}`;
+            target.reason = `Estatus STC ${denialStatus}`;
+            target.status = 'pending';
+            target.denied = date.toISOString().slice(0, 10);
+            summary.denials += 1;
+            createdDenials.push(target.id);
+          } else {
+            target.status = target.status || 'pending';
+          }
+        }
+
+        if (type === 'CSV') {
+          if (row.denialCode) {
+            target.code = row.denialCode;
+            target.reason = row.denialReason || 'Denial desde CSV';
+            target.status = 'pending';
+            target.denied = date.toISOString().slice(0, 10);
+            summary.denials += 1;
+            createdDenials.push(target.id);
+          }
+          if (row.amount) target.amount = Number(row.amount);
+        }
+      });
+      return updated.map((c) => ({ ...c, ...score(c, date, rules) }));
+    });
+
+    if (unmatchedItems.length) {
+      setUnmatched((prev) => [...unmatchedItems, ...prev]);
+    }
+
+    const newTriage = {};
+    createdDenials.forEach((denialId) => {
+      const claim = claims.find((c) => c.id === denialId) || initClaims.find((c) => c.id === denialId);
+      if (!claim) return;
+      newTriage[denialId] = runTriage(claim, claim);
+    });
+    if (Object.keys(newTriage).length) {
+      setTriageResults((prev) => ({ ...prev, ...newTriage }));
+    }
+
+    updateRun(runId, (run) => ({
+      ...run,
+      files: run.files.map((f) =>
+        f.id === fileEntry.id
+          ? {
+              ...f,
+              type,
+              status: errors.length ? 'ok_with_errors' : 'ok',
+              errors,
+              counts: summary,
+              headers: detectedHeaders,
+              mapping: csvMapping || f.mapping,
+            }
+          : f
+      ),
+    }));
+    if (errors.length) {
+      setNeedsReview((prev) => [
+        {
+          id: fileEntry.id,
+          name: fileEntry.name,
+          reason: `${errors.length} errores de parseo`,
+          receivedAt: fileEntry.receivedAt,
+        },
+        ...prev,
+      ]);
+    }
+
+    logAudit({
+      action: 'Archivo procesado',
+      claimId: 'INGEST',
+      detail: `${fileEntry.name} → ${type}`,
+      source: 'system',
+    });
+
+    return { denialsCreated: createdDenials.length };
+  };
+
+  const processIngestionRun = async (runId, files) => {
+    let totalDenials = 0;
+    for (let i = 0; i < files.length; i += 1) {
+      const result = await processFileEntry(runId, files[i], i);
+      totalDenials += result.denialsCreated;
+    }
+    updateRun(runId, (run) => ({
+      ...run,
+      status: run.files.some((file) => file.status === 'needs_mapping')
+        ? 'waiting_mapping'
+        : run.files.some((file) => file.status === 'error')
+          ? 'error'
+          : 'completed',
+    }));
+    if (awaitingInboxRedirect && totalDenials > 0) {
+      setView('denials');
+      setAwaitingInboxRedirect(false);
+    }
+  };
+
+  const applyCsvMapping = (fileId, mapping) => {
+    const run = ingestionRuns.find((entry) => entry.files.some((file) => file.id === fileId));
+    if (!run) return;
+    const fileIndex = run.files.findIndex((file) => file.id === fileId);
+    const fileEntry = run.files[fileIndex];
+    setPendingMappings((prev) => {
+      const next = { ...prev };
+      delete next[fileId];
+      return next;
+    });
+    setMappingDrafts((prev) => {
+      const next = { ...prev };
+      delete next[fileId];
+      return next;
+    });
+    updateRun(run.id, (prevRun) => ({
+      ...prevRun,
+      status: 'queued',
+      files: prevRun.files.map((file) =>
+        file.id === fileId ? { ...file, mapping, status: 'queued', errors: [] } : file
+      ),
+    }));
+    setTimeout(() => {
+      processFileEntry(run.id, fileEntry, fileIndex, mapping);
+    }, 300);
+  };
+
+  const reprocessFile = (runId, fileId) => {
+    const run = ingestionRuns.find((entry) => entry.id === runId);
+    if (!run) return;
+    const fileIndex = run.files.findIndex((file) => file.id === fileId);
+    const fileEntry = run.files[fileIndex];
+    if (!fileEntry) return;
+    updateRun(runId, (prevRun) => ({
+      ...prevRun,
+      status: 'queued',
+      files: prevRun.files.map((file) =>
+        file.id === fileId ? { ...file, status: 'queued', errors: [] } : file
+      ),
+    }));
+    setTimeout(() => {
+      processFileEntry(runId, fileEntry, fileIndex, fileEntry.mapping || null);
+    }, 300);
+  };
+
+  const handleUploadFiles = async (fileList) => {
+    const expanded = await expandFiles(fileList);
+    if (!expanded.length) return;
+    const runId = `ing-${Date.now()}`;
+    const now = new Date().toISOString();
+    const fileRecords = expanded.map((file) => ({
+      id: file.id,
+      name: file.name,
+      sourceName: file.sourceName,
+      type: detectEdiType(file.name, file.content),
+      receivedAt: now,
+      status: 'queued',
+      counts: {
+        claims: 0,
+        denials: 0,
+        payments: 0,
+        adjustments: 0,
+        matched: 0,
+        created: 0,
+        needsReview: 0,
+      },
+      errors: [],
+      warnings: [],
+      content: file.content,
+      zipError: file.zipError,
+    }));
+    const newRun = {
+      id: runId,
+      createdAt: now,
+      status: 'queued',
+      files: fileRecords,
+    };
+    setIngestionRuns((prev) => [newRun, ...prev]);
+    setActiveRunId(runId);
+    logAudit({
+      action: 'Ingestión creada',
+      claimId: 'INGEST',
+      detail: `Run ${runId} (${fileRecords.length} archivos)`,
+      source: 'system',
+    });
+    setTimeout(() => {
+      processIngestionRun(runId, fileRecords);
+    }, 400);
   };
 
   const downloadSample = (type) => {
     const content =
       type === '835'
-        ? 'CLP*CLM-010*1*1250*950*300*12*12345*11~'
+        ? 'CLP*PCN-2001*1*1250*0*1250*12*PAT-2001*11~TRN*1*TRK-2001~CAS*CO*16*1250~'
         : type === '277ca'
-          ? 'TRN*1*CLM-010*123456789~STC*A1:19*20240101*U*CO:16~'
-          : 'claim_id,denial_code,denial_reason,amount\nCLM-010,CO-16,Falta info,500';
+          ? 'TRN*1*TRK-3001*123456789~REF*1K*PAT-3001~STC*A1:19*20240101*U*CO:16~'
+          : 'claim_id,denial_code,denial_reason,amount\nPCN-4001,CO-16,Falta info,500';
     const blob = new Blob([content], { type: 'text/plain' });
     const link = document.createElement('a');
     link.href = URL.createObjectURL(blob);
-    link.download = `sample-${type}.txt`;
+    link.download = type === 'csv' ? `sample-${type}.csv` : `sample-${type}.txt`;
     link.click();
   };
 
@@ -648,8 +1167,8 @@ export default function App() {
       host: form.get('host'),
       user: form.get('user'),
       path: form.get('path'),
-      schedule: form.get('schedule'),
-      timezone: form.get('timezone'),
+      schedule: 'Pendiente',
+      timezone: 'Pendiente',
       lastPull: 'Pendiente',
       lastFile: '-',
       errors: 0,
@@ -870,9 +1389,9 @@ Paciente: ${patientName}
       body: 'Cada cambio queda registrado con usuario, hora y explicación.',
     },
     {
-      id: 'nav-how',
-      title: '5. Cómo funciona',
-      body: 'Explica el flujo de punta a punta con palabras simples.',
+      id: 'nav-tutorial',
+      title: '5. Cómo llegan los denials',
+      body: 'Explica el origen real de los archivos y el orden recomendado.',
     },
   ];
 
@@ -921,6 +1440,8 @@ Paciente: ${patientName}
     return <span className={`px-1 py-0.5 rounded text-xs ${cls}`}>{label}</span>;
   };
 
+  const activeRun = ingestionRuns.find((run) => run.id === activeRunId) || ingestionRuns[0];
+
   return (
     <div className="h-screen flex bg-slate-100 overflow-hidden text-xs">
       <div className={`${side ? 'w-36' : 'w-10'} bg-slate-900 text-white flex flex-col`}>
@@ -938,15 +1459,14 @@ Paciente: ${patientName}
         <nav className="flex-1 p-1 space-y-1">
           {[
             ['dashboard', BarChart3, 'Dashboard'],
-            ['implementation', CheckCircle, 'Conecta tu fuente'],
-            ['integrations', Users, 'Integraciones'],
-            ['upload', Upload, 'Upload Center'],
-            ['denials', AlertCircle, 'Denials'],
+            ['tutorial', FileText, 'Cómo llegan los denials'],
+            ['intake', Upload, 'Data Intake'],
+            ['ingestions', History, 'Historial de ingestión'],
+            ['denials', AlertCircle, 'Denials Inbox'],
             ['unmatched', Users, 'Unmatched'],
-            ['review', History, 'Errores'],
+            ['integrations', Users, 'SFTP (visual)'],
             ['payments', DollarSign, 'Pagos'],
             ['audit', History, 'Auditoría'],
-            ['how', FileText, 'Aprender el flujo'],
           ].map(([id, Icon, label]) => (
             <button
               key={id}
@@ -975,23 +1495,23 @@ Paciente: ${patientName}
           <span className="font-semibold">
             {view === 'dashboard'
               ? 'Dashboard'
-              : view === 'implementation'
-                ? 'Conecta tu fuente'
-                : view === 'integrations'
-                  ? 'Integraciones'
-                  : view === 'upload'
-                    ? 'Upload Center'
-                    : view === 'denials'
-                      ? 'Denials'
-                      : view === 'unmatched'
-                        ? 'Unmatched'
-                        : view === 'review'
-                          ? 'Errores de ingestión'
+              : view === 'tutorial'
+                ? 'Cómo llegan los denials'
+                : view === 'intake'
+                  ? 'Data Intake'
+                  : view === 'ingestions'
+                    ? 'Historial de ingestión'
+                    : view === 'integrations'
+                      ? 'SFTP (visual)'
+                      : view === 'denials'
+                        ? 'Denials Inbox'
+                        : view === 'unmatched'
+                          ? 'Unmatched'
                           : view === 'payments'
                             ? 'Pagos'
-                        : view === 'how'
-                          ? 'Aprender el flujo'
-                              : 'Auditoría'}
+                            : view === 'audit'
+                              ? 'Auditoría'
+                              : 'Detalle'}
           </span>
           <div className="flex items-center gap-2">
             <span className="bg-slate-100 px-1.5 py-0.5 rounded flex items-center gap-1">
@@ -1034,42 +1554,52 @@ Paciente: ${patientName}
         </header>
 
         <main className="flex-1 overflow-auto p-2">
-          {view === 'implementation' && (
+          {view === 'tutorial' && (
             <div className="space-y-2">
               <div className="bg-white rounded p-2 border">
-                <h2 className="font-semibold">Conecta tu fuente</h2>
-                <p className="text-slate-600 mt-1">Elige cómo llegan los denials en el MVP.</p>
+                <h2 className="font-semibold">Cómo llegan los denials</h2>
+                <p className="text-slate-600 mt-1">
+                  Tres pasos simples para explicar a un cliente cómo se alimenta la cola sin magia.
+                </p>
               </div>
-              <div className="grid grid-cols-3 gap-2">
-                {[
-                  {
-                    title: 'Modo A · Carga manual',
-                    body: 'Sube 277CA/835/CSV en Upload Center. Ideal para el piloto.',
-                    action: () => setView('upload'),
-                  },
-                  {
-                    title: 'Modo B · SFTP',
-                    body: 'Configura una carpeta SFTP para ingestión automática diaria.',
-                    action: () => setView('integrations'),
-                  },
-                  {
-                    title: 'Modo C · API clearinghouse',
-                    body: 'Coming soon. Mostramos la estructura sin integración real.',
-                    action: null,
-                  },
-                ].map((step) => (
-                  <div key={step.title} className="bg-white rounded p-2 border">
-                    <p className="font-semibold">{step.title}</p>
-                    <p className="text-slate-600 mt-1">{step.body}</p>
-                    {step.action ? (
-                      <button onClick={step.action} className="mt-2 px-2 py-1 border rounded hover:bg-slate-50">
-                        Ir ahora
-                      </button>
-                    ) : (
-                      <span className="mt-2 inline-block text-xs text-slate-400">Próximamente</span>
-                    )}
+              <div className="bg-white rounded p-3 border">
+                <p className="text-emerald-600 text-xs">Paso {tutorialStepIndex + 1} de 3</p>
+                <h3 className="font-semibold mt-1">{tutorialSteps[tutorialStepIndex].title}</h3>
+                <p className="text-slate-600 mt-1">{tutorialSteps[tutorialStepIndex].body}</p>
+                {tutorialStepIndex === 1 ? (
+                  <div className="mt-2 p-2 bg-slate-50 rounded border text-xs text-slate-600">
+                    <p className="font-semibold text-slate-700">Mini ejemplo</p>
+                    <p>1) Subes 277CA (rechazos/estatus) → 2) Subes 835 (ajustes y pagos).</p>
                   </div>
-                ))}
+                ) : null}
+                <div className="mt-3 flex justify-between">
+                  <button
+                    onClick={() => setTutorialStepIndex((prev) => Math.max(0, prev - 1))}
+                    className="px-3 py-1 border rounded hover:bg-slate-50"
+                    disabled={tutorialStepIndex === 0}
+                  >
+                    Anterior
+                  </button>
+                  {tutorialStepIndex < tutorialSteps.length - 1 ? (
+                    <button
+                      onClick={() => setTutorialStepIndex((prev) => Math.min(tutorialSteps.length - 1, prev + 1))}
+                      className="px-3 py-1 bg-emerald-600 text-white rounded"
+                    >
+                      Siguiente
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => {
+                        setAwaitingInboxRedirect(true);
+                        setTutorialStepIndex(0);
+                        setView('intake');
+                      }}
+                      className="px-3 py-1 bg-emerald-600 text-white rounded"
+                    >
+                      Ir a subir archivos
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
           )}
@@ -1077,19 +1607,17 @@ Paciente: ${patientName}
           {view === 'integrations' && (
             <div className="space-y-2">
               <div className="bg-white rounded p-2 border">
-                <h2 className="font-semibold">Integraciones por tenant</h2>
+                <h2 className="font-semibold">Configuración SFTP (visual)</h2>
                 <p className="text-slate-600 mt-1">
-                  Configura SFTP y mapeos mínimos. En MVP solo pedimos lo esencial para empezar.
+                  Solo guardamos la configuración. La conexión real se implementará más adelante.
                 </p>
                 <form onSubmit={addIntegration} className="grid grid-cols-3 gap-2 mt-2">
                   <input name="name" placeholder="Nombre" className="border rounded p-1" required />
                   <input name="host" placeholder="Host SFTP" className="border rounded p-1" required />
                   <input name="user" placeholder="Usuario" className="border rounded p-1" required />
-                  <input name="path" placeholder="Ruta" className="border rounded p-1" required />
-                  <input name="schedule" placeholder="Frecuencia" className="border rounded p-1" required />
-                  <input name="timezone" placeholder="Zona horaria" className="border rounded p-1" required />
-                  <button type="submit" className="px-3 py-1 bg-emerald-600 text-white rounded">
-                    Guardar integración
+                  <input name="path" placeholder="Folder / Ruta" className="border rounded p-1" required />
+                  <button type="submit" className="px-3 py-1 bg-emerald-600 text-white rounded col-span-3">
+                    Guardar configuración
                   </button>
                 </form>
               </div>
@@ -1101,14 +1629,14 @@ Paciente: ${patientName}
                       <div>
                         <p className="font-medium">{int.name}</p>
                         <p className="text-slate-500 text-xs">
-                          {int.host} • {int.path} • {int.schedule} • {int.timezone}
+                          {int.host} • {int.path} • Usuario: {int.user}
                         </p>
-                        <p className="text-slate-400 text-xs">Modo C (API clearinghouse): Coming soon</p>
+                        <p className="text-slate-400 text-xs">Status: Pendiente de conexión real</p>
                       </div>
                       <div className="text-right text-xs text-slate-500">
-                        <p>Último pull: {int.lastPull}</p>
-                        <p>Último archivo: {int.lastFile}</p>
-                        <p>Errores: {int.errors}</p>
+                        <p>Status: {int.lastPull === 'Pendiente' ? 'Pendiente' : 'Pendiente'}</p>
+                        <p>Host: {int.host}</p>
+                        <p>Folder: {int.path}</p>
                       </div>
                     </div>
                   ))}
@@ -1117,7 +1645,7 @@ Paciente: ${patientName}
             </div>
           )}
 
-          {view === 'upload' && (
+          {view === 'intake' && (
             <div className="space-y-2">
               <div
                 className="bg-white rounded p-2 border border-dashed"
@@ -1129,11 +1657,11 @@ Paciente: ${patientName}
                   }
                 }}
               >
-                <h2 className="font-semibold">Upload Center</h2>
+                <h2 className="font-semibold">Data Intake</h2>
                 <p className="text-slate-600 mt-1">
-                  Sube archivos 277CA, 835 o CSV. El sistema detecta, parsea y ejecuta triage IA.
+                  Sube 835, 277CA, CSV o un ZIP con varios archivos. Detectamos el tipo y procesamos en background.
                 </p>
-                <div className="mt-2 flex items-center gap-2">
+                <div className="mt-2 flex flex-wrap items-center gap-2">
                   <label className="px-3 py-1 border rounded cursor-pointer bg-white hover:bg-slate-50">
                     Cargar archivos
                     <input
@@ -1159,33 +1687,100 @@ Paciente: ${patientName}
                   </button>
                 </div>
               </div>
-              <div className="bg-white rounded p-2 border">
-                <p className="font-semibold">Progreso de archivos</p>
-                {uploads.length ? (
+
+              {Object.keys(pendingMappings).length ? (
+                <div className="bg-white rounded p-2 border">
+                  <p className="font-semibold">Mapeo CSV pendiente</p>
                   <div className="mt-2 space-y-2">
-                    {uploads.map((u) => (
-                      <div key={u.id} className="p-2 border rounded bg-slate-50">
+                    {Object.entries(pendingMappings).map(([fileId, mappingInfo]) => {
+                      const draft = mappingDrafts[fileId] || {};
+                      return (
+                        <div key={fileId} className="p-2 bg-slate-50 rounded border">
+                          <p className="font-medium">Archivo CSV sin columnas esperadas</p>
+                          <p className="text-xs text-slate-500">Selecciona las columnas correctas para procesarlo.</p>
+                          <div className="grid grid-cols-2 gap-2 mt-2">
+                            {CSV_FIELDS.map((field) => (
+                              <label key={field} className="text-xs text-slate-600">
+                                {CSV_FIELD_LABELS[field]}
+                                <select
+                                  className="w-full border rounded p-1 mt-1"
+                                  value={draft[field] || ''}
+                                  onChange={(e) =>
+                                    setMappingDrafts((prev) => ({
+                                      ...prev,
+                                      [fileId]: { ...prev[fileId], [field]: e.target.value },
+                                    }))
+                                  }
+                                >
+                                  <option value="">-- Sin asignar --</option>
+                                  {mappingInfo.headers.map((header) => (
+                                    <option key={header} value={header}>
+                                      {header}
+                                    </option>
+                                  ))}
+                                </select>
+                              </label>
+                            ))}
+                          </div>
+                          <button
+                            onClick={() => applyCsvMapping(fileId, draft)}
+                            className="mt-2 px-3 py-1 bg-emerald-600 text-white rounded disabled:opacity-60"
+                            disabled={
+                              !draft.claimId && !draft.payerClaimNumber && !draft.patientControlNumber && !draft.trackingNumber
+                            }
+                          >
+                            Procesar CSV
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : null}
+
+              <div className="bg-white rounded p-2 border">
+                <p className="font-semibold">Resultado por archivo</p>
+                {activeRun?.files?.length ? (
+                  <div className="mt-2 space-y-2">
+                    {activeRun.files.map((file) => (
+                      <div key={file.id} className="p-2 border rounded bg-slate-50">
                         <div className="flex justify-between">
-                          <span className="font-medium">{u.name}</span>
-                          <span className="text-slate-500">{u.type}</span>
+                          <span className="font-medium">
+                            {file.name}
+                            {file.sourceName ? <span className="text-xs text-slate-400"> ({file.sourceName})</span> : null}
+                          </span>
+                          <span className="text-slate-500">{file.type}</span>
                         </div>
-                        <div className="mt-1 flex items-center gap-2 text-xs">
-                          <span className={`px-2 py-0.5 rounded ${u.status === 'received' ? 'bg-slate-200' : 'bg-emerald-100 text-emerald-700'}`}>
-                            Recibido
+                        <div className="mt-1 flex flex-wrap items-center gap-2 text-xs">
+                          <span className="px-2 py-0.5 rounded bg-slate-200">Status: {file.status}</span>
+                          <span className="px-2 py-0.5 rounded bg-emerald-100 text-emerald-700">
+                            Denials: {file.counts.denials}
                           </span>
-                          <span className={`px-2 py-0.5 rounded ${u.status === 'parsed' || u.status === 'triaged' ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-200'}`}>
-                            Parseado
+                          <span className="px-2 py-0.5 rounded bg-blue-100 text-blue-700">
+                            Pagos: {file.counts.payments}
                           </span>
-                          <span className={`px-2 py-0.5 rounded ${u.status === 'triaged' ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-200'}`}>
-                            Triage IA listo
+                          <span className="px-2 py-0.5 rounded bg-amber-100 text-amber-700">
+                            Ajustes: {file.counts.adjustments}
                           </span>
-                          {u.status === 'needs_review' ? <span className="text-red-600">Needs Review</span> : null}
+                          <span className="px-2 py-0.5 rounded bg-slate-200">Match: {file.counts.matched}</span>
+                          <span className="px-2 py-0.5 rounded bg-red-100 text-red-700">
+                            Needs review: {file.counts.needsReview}
+                          </span>
                         </div>
+                        {file.errors?.length ? (
+                          <div className="mt-2 text-xs text-red-600 space-y-1">
+                            {file.errors.map((err, idx) => (
+                              <p key={`${file.id}-err-${idx}`}>
+                                Línea {err.line}: {err.message}
+                              </p>
+                            ))}
+                          </div>
+                        ) : null}
                       </div>
                     ))}
                   </div>
                 ) : (
-                  <p className="text-slate-400 mt-1">Sin archivos cargados todavía.</p>
+                  <p className="text-slate-400 mt-1">Sin archivos procesados todavía.</p>
                 )}
               </div>
             </div>
@@ -1442,7 +2037,7 @@ Paciente: ${patientName}
                       </div>
                     ) : (
                       <div className="p-2 bg-slate-50 border rounded text-slate-500 text-xs">
-                        Sin triage IA todavía. Sube un 277CA/835 en Upload Center para generar sugerencias.
+                        Sin triage IA todavía. Sube un 277CA/835 en Data Intake para generar sugerencias.
                       </div>
                     )}
                     <div className="p-1.5 bg-slate-50 rounded">
@@ -1542,32 +2137,57 @@ Paciente: ${patientName}
             </div>
           )}
 
-          {view === 'review' && (
-            <div className="bg-white rounded p-2 border">
-              <div className="flex justify-between mb-2">
-                <span className="font-semibold">Errores de ingestión ({needsReview.length})</span>
-                <span className="text-slate-400">Revisar archivos inválidos</span>
-              </div>
-              {needsReview.length ? (
-                <div className="space-y-2">
-                  {needsReview.map((item) => (
-                    <div key={item.id} className="p-2 bg-slate-50 rounded flex justify-between items-center">
-                      <div>
-                        <p className="font-medium">{item.name}</p>
-                        <p className="text-slate-500 text-xs">{item.reason}</p>
-                      </div>
-                      <button
-                        onClick={() => setNeedsReview((prev) => prev.filter((r) => r.id !== item.id))}
-                        className="px-2 py-1 border rounded hover:bg-slate-100"
-                      >
-                        Marcar resuelto
-                      </button>
-                    </div>
-                  ))}
+          {view === 'ingestions' && (
+            <div className="space-y-2">
+              <div className="bg-white rounded p-2 border">
+                <div className="flex justify-between mb-2">
+                  <span className="font-semibold">Historial de ingestión ({ingestionRuns.length})</span>
+                  <span className="text-slate-400">Estado por archivo</span>
                 </div>
-              ) : (
-                <p className="text-slate-400">Sin archivos pendientes.</p>
-              )}
+                {ingestionRuns.length ? (
+                  <div className="space-y-3">
+                    {ingestionRuns.map((run) => (
+                      <div key={run.id} className="border rounded p-2 bg-slate-50">
+                        <div className="flex justify-between text-xs text-slate-500">
+                          <span>Run {run.id}</span>
+                          <span>{new Date(run.createdAt).toLocaleString()}</span>
+                        </div>
+                        <p className="text-xs text-slate-400">Estado: {run.status}</p>
+                        <div className="mt-2 space-y-2">
+                          {run.files.map((file) => (
+                            <div key={file.id} className="p-2 bg-white border rounded flex justify-between items-center">
+                              <div>
+                                <p className="font-medium">
+                                  {file.name} {file.sourceName ? <span className="text-xs text-slate-400">({file.sourceName})</span> : null}
+                                </p>
+                                <p className="text-xs text-slate-500">
+                                  {file.type} • {file.status} • Denials {file.counts.denials} • Errors {file.errors.length}
+                                </p>
+                              </div>
+                              <div className="flex gap-2">
+                                <button
+                                  onClick={() => setIngestionDetail({ runId: run.id, file })}
+                                  className="px-2 py-1 border rounded hover:bg-slate-100"
+                                >
+                                  Ver detalles
+                                </button>
+                                <button
+                                  onClick={() => reprocessFile(run.id, file.id)}
+                                  className="px-2 py-1 bg-emerald-600 text-white rounded"
+                                >
+                                  Reprocesar
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-slate-400">Sin ingestiones todavía.</p>
+                )}
+              </div>
             </div>
           )}
 
@@ -1669,65 +2289,55 @@ Paciente: ${patientName}
             </div>
           )}
 
-              {view === 'how' && (
-                <div className="space-y-2">
-                  <div className="bg-white rounded p-2 border">
-                    <h2 className="font-semibold">Cómo funciona Denials Zero Desk</h2>
-                    <p className="text-slate-600 mt-1">
-                      Flujo simple pensado para equipos no técnicos: cargar denials, priorizar, ejecutar acciones y dejar trazabilidad.
-                    </p>
-                  </div>
-                  <div className="grid grid-cols-3 gap-2">
-                    {[
-                  { title: '1. Llegada de denials', body: '837 se envía al clearinghouse; 277CA y 835 regresan y alimentan la cola.' },
-                  { title: '2. Priorización', body: 'El sistema ordena por monto, antigüedad y reglas del pagador.' },
-                  { title: '3. Acción y apelación', body: 'Se aplican pasos sugeridos y se genera un borrador de apelación.' },
-                    ].map((card) => (
-                  <div key={card.title} className="bg-white rounded p-2 border">
-                    <p className="font-semibold">{card.title}</p>
-                    <p className="text-slate-600 mt-1">{card.body}</p>
+              
+        </main>
+      </div>
+
+      {ingestionDetail && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded w-full max-w-lg mx-4">
+            <div className="p-2 border-b flex justify-between">
+              <span className="font-semibold">Detalles de ingestión</span>
+              <button onClick={() => setIngestionDetail(null)}>
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-3 space-y-2 text-xs">
+              <p className="font-semibold">{ingestionDetail.file.name}</p>
+              <p className="text-slate-500">
+                Tipo: {ingestionDetail.file.type} • Estado: {ingestionDetail.file.status}
+              </p>
+              <div className="grid grid-cols-3 gap-2">
+                {Object.entries(ingestionDetail.file.counts).map(([label, value]) => (
+                  <div key={label} className="bg-slate-50 rounded p-2 border">
+                    <p className="text-slate-500">{label}</p>
+                    <p className="font-semibold">{value}</p>
                   </div>
                 ))}
               </div>
-              <div className="bg-white rounded p-2 border">
-                <p className="font-semibold">Modo A · Carga manual</p>
-                <p className="text-slate-600 mt-1">
-                  El cliente sube 277CA/835/CSV al Upload Center. El sistema detecta, parsea y crea la cola priorizada.
-                </p>
-                <p className="font-semibold mt-2">Modo B · SFTP</p>
-                <p className="text-slate-600 mt-1">
-                  Se configura una carpeta segura. El sistema descarga archivos diarios y los procesa igual que la carga manual.
-                </p>
-                <p className="font-semibold mt-2">Modo C · API clearinghouse</p>
-                <p className="text-slate-600 mt-1">
-                  Próximamente: integración directa vía API. En este MVP solo mostramos la estructura.
-                </p>
-                <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-slate-600">
-                  <div className="bg-slate-50 rounded p-2">
-                    <p className="font-semibold">¿De dónde salen los denials?</p>
-                    <p>De 277CA y ajustes en 835 (ERA) con códigos de razón.</p>
-                  </div>
-                  <div className="bg-slate-50 rounded p-2">
-                    <p className="font-semibold">¿Qué debe hacer el cliente?</p>
-                    <p>Conectar SFTP o subir manualmente los archivos del clearinghouse.</p>
-                  </div>
-                  <div className="bg-slate-50 rounded p-2">
-                    <p className="font-semibold">¿Qué necesitamos?</p>
-                    <p>Credenciales SFTP, ids de pagador y un sample 277CA/835.</p>
-                  </div>
-                  <div className="bg-slate-50 rounded p-2">
-                    <p className="font-semibold">¿Qué pasa con errores?</p>
-                    <p>Van a Errores de ingestión con motivo claro para revisión.</p>
-                  </div>
+              {ingestionDetail.file.errors?.length ? (
+                <div>
+                  <p className="font-semibold text-red-600">Errores</p>
+                  <ul className="list-disc list-inside text-red-600">
+                    {ingestionDetail.file.errors.map((err, idx) => (
+                      <li key={`${ingestionDetail.file.id}-detail-${idx}`}>
+                        Línea {err.line}: {err.message}
+                      </li>
+                    ))}
+                  </ul>
                 </div>
-                <div className="mt-2 text-xs text-slate-500">
-                  Descarga ejemplos en Upload Center y vuelve a subirlos para ver el flujo completo.
-                </div>
-              </div>
+              ) : (
+                <p className="text-slate-400">Sin errores reportados.</p>
+              )}
             </div>
-          )}
-        </main>
-      </div>
+            <div className="p-2 border-t flex justify-end">
+              <button onClick={() => setIngestionDetail(null)} className="px-3 py-1 border rounded">
+                Cerrar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {modal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
