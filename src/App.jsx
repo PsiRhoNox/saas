@@ -12,13 +12,14 @@ import {
   Menu,
   RefreshCw,
   Search,
+  Upload,
   Users,
   X,
   Zap,
 } from 'lucide-react';
 
 const STORAGE_KEY = 'denialsZeroDesk';
-const STORAGE_VERSION = 2;
+const STORAGE_VERSION = 3;
 const SCORING_VERSION = 'v1.2';
 const APPEAL_MODEL_VERSION = 'demo-fallback-v1';
 
@@ -275,6 +276,11 @@ export default function App() {
   const [demoMode, setDemoMode] = useState(true);
   const [showTour, setShowTour] = useState(false);
   const [tourStep, setTourStep] = useState(0);
+  const [uploads, setUploads] = useState([]);
+  const [needsReview, setNeedsReview] = useState([]);
+  const [unmatched, setUnmatched] = useState([]);
+  const [triageResults, setTriageResults] = useState({});
+  const [tasks, setTasks] = useState([]);
 
   useEffect(() => {
     const stored = getStoredState();
@@ -282,6 +288,11 @@ export default function App() {
       setRules(stored.rules || defaultRules);
       setStats(stored.stats || { proc: 0, app: 0 });
       setDemoMode(stored.demoMode ?? true);
+      setUploads(stored.uploads || []);
+      setNeedsReview(stored.needsReview || []);
+      setUnmatched(stored.unmatched || []);
+      setTriageResults(stored.triageResults || {});
+      setTasks(stored.tasks || []);
       if (stored.date) setDate(new Date(stored.date));
       const seeded = hydrateClaims(stored.claims || initClaims, stored.date || date, stored.rules || defaultRules);
       setClaims(seeded);
@@ -339,8 +350,13 @@ export default function App() {
       date: date.toISOString(),
       rules,
       demoMode,
+      uploads,
+      needsReview,
+      unmatched,
+      triageResults,
+      tasks,
     });
-  }, [claims, audit, stats, date, rules, demoMode]);
+  }, [claims, audit, stats, date, rules, demoMode, uploads, needsReview, unmatched, triageResults, tasks]);
 
   const metrics = useMemo(() => {
     const totalAmount = claims.reduce((sum, claim) => sum + claim.amount, 0);
@@ -372,6 +388,237 @@ export default function App() {
       result,
     });
     setAudit((prev) => [entry, ...prev]);
+  };
+
+  const detectEdiType = (fileName, content) => {
+    const upper = `${fileName} ${content}`.toUpperCase();
+    if (upper.includes('835') || upper.includes('BPR') || upper.includes('CLP')) return '835';
+    if (upper.includes('277') || upper.includes('STC')) return '277CA';
+    return 'unknown';
+  };
+
+  const parse835 = (content) => {
+    const claimsParsed = [];
+    const regex = /CLP\*([^*]+)\*[^*]*\*([0-9.]+)\*([0-9.]+)\*([0-9.]+)\*/g;
+    let match = regex.exec(content);
+    while (match) {
+      const [_, externalId, charged, paid, patientResp] = match;
+      claimsParsed.push({
+        externalId,
+        charged: Number(charged),
+        paid: Number(paid),
+        patientResp: Number(patientResp),
+      });
+      match = regex.exec(content);
+    }
+    return claimsParsed;
+  };
+
+  const parse277 = (content) => {
+    const claimsParsed = [];
+    const regex = /TRN\*1\*([^~*\n\r]+)[^~]*~?[^~]*STC\*([^*~]+)/g;
+    let match = regex.exec(content);
+    while (match) {
+      const [_, externalId, status] = match;
+      claimsParsed.push({
+        externalId,
+        status,
+      });
+      match = regex.exec(content);
+    }
+    return claimsParsed;
+  };
+
+  const runTriage = (denial, claim) => {
+    const rule = defaultRules.denialFactors[denial.code] || { rec: 0.5, boost: 0, act: 'Revisar' };
+    const priorityAdjustment = Math.round(rule.boost / 4);
+    return {
+      denial_category_normalized: denial.code.startsWith('CO') ? 'coding' : 'eligibility',
+      root_cause_guess: { label: denial.reason || 'Faltan datos', confidence: 0.58 },
+      suggested_action_short: rule.act,
+      suggested_action_steps: ['Revisar el expediente', 'Validar CPT/Dx', 'Adjuntar soporte', 'Reenviar al pagador'],
+      required_documents: ['Notas clínicas', 'Orden médica', 'Evidencia de elegibilidad'],
+      who_should_work_it: 'RCM Specialist',
+      priority_adjustment: priorityAdjustment,
+      appeal_recommended: rule.rec > 0.6,
+      appeal_angle: 'Necesidad médica y corrección de documentación.',
+      warnings: ['Datos incompletos del pagador', 'Verificar elegibilidad'],
+    };
+  };
+
+  const applyTriage = (denialId) => {
+    const result = triageResults[denialId];
+    if (!result) return;
+    const claim = claims.find((c) => c.id === denialId);
+    if (!claim) return;
+    const adjusted = Math.max(1, Math.min(99, claim.prio + result.priority_adjustment));
+    const updated = {
+      ...claim,
+      action: result.suggested_action_short,
+      prio: adjusted,
+      status: claim.status === 'pending' ? 'in_progress' : claim.status,
+    };
+    setClaims((prev) => prev.map((c) => (c.id === claim.id ? updated : c)));
+    if (sel?.id === claim.id) setSel(updated);
+    setTasks((prev) => [
+      {
+        id: Date.now(),
+        claimId: claim.id,
+        title: result.suggested_action_short,
+        owner: result.who_should_work_it,
+        status: 'open',
+      },
+      ...prev,
+    ]);
+    logAudit({
+      action: 'Sistema aplicó sugerencias IA',
+      claimId: claim.id,
+      detail: result.suggested_action_short,
+      source: 'system',
+      scoring: updated,
+      aiDecision: true,
+      modelVersion: APPEAL_MODEL_VERSION,
+      requestId: `triage-${denialId}`,
+      result: 'ok',
+    });
+  };
+
+  const handleUploadFiles = async (fileList) => {
+    const files = Array.from(fileList);
+    for (const file of files) {
+      if (!file.name) continue;
+      const content = await file.text();
+      const type = detectEdiType(file.name, content);
+      const uploadId = `${Date.now()}-${file.name}`;
+      const baseUpload = {
+        id: uploadId,
+        name: file.name,
+        type,
+        receivedAt: new Date().toISOString(),
+        status: 'received',
+        warnings: [],
+      };
+      setUploads((prev) => [baseUpload, ...prev]);
+      logAudit({
+        action: 'Archivo recibido',
+        claimId: 'INGEST',
+        detail: `${file.name} (${type})`,
+        source: 'system',
+      });
+
+      if (type === 'unknown') {
+        setNeedsReview((prev) => [
+          { id: uploadId, name: file.name, reason: 'Tipo no reconocido', receivedAt: baseUpload.receivedAt },
+          ...prev,
+        ]);
+        setUploads((prev) => prev.map((u) => (u.id === uploadId ? { ...u, status: 'needs_review' } : u)));
+        logAudit({
+          action: 'Archivo requiere revisión',
+          claimId: 'INGEST',
+          detail: file.name,
+          source: 'system',
+        });
+        continue;
+      }
+
+      setUploads((prev) => prev.map((u) => (u.id === uploadId ? { ...u, status: 'parsed' } : u)));
+      const parsedClaims = type === '835' ? parse835(content) : parse277(content);
+      if (!parsedClaims.length) {
+        setNeedsReview((prev) => [
+          { id: uploadId, name: file.name, reason: 'Sin datos reconocibles', receivedAt: baseUpload.receivedAt },
+          ...prev,
+        ]);
+        setUploads((prev) => prev.map((u) => (u.id === uploadId ? { ...u, status: 'needs_review' } : u)));
+        continue;
+      }
+
+      const createdDenials = [];
+      const unmatchedItems = [];
+      setClaims((prev) => {
+        const updated = [...prev];
+        parsedClaims.forEach((row) => {
+          const existing = updated.find((c) => c.id === row.externalId);
+          if (existing) {
+            existing.amount = row.charged ? row.charged : existing.amount;
+            existing.status = existing.status || 'pending';
+            if (type === '277CA') {
+              createdDenials.push(existing.id);
+            }
+            return;
+          }
+          if (type === '277CA') {
+            unmatchedItems.push({
+              id: row.externalId,
+              suggestion: 'Revisar patient control number',
+              reason: 'Claim no encontrado',
+            });
+            return;
+          }
+          const newClaim = {
+            id: row.externalId,
+            patient: demoMode ? 'Paciente Demo' : 'Paciente Nuevo',
+            payer: 'Blue Cross',
+            amount: row.charged || 1200,
+            code: 'CO-11',
+            reason: 'Dx inconsistente',
+            status: 'pending',
+            cpt: '99214',
+            dx: 'E11.9',
+            provider: 'Dr. Demo',
+            facility: 'Main Clinic',
+            submitted: date.toISOString().slice(0, 10),
+            denied: date.toISOString().slice(0, 10),
+            appeals: [],
+          };
+          updated.push({ ...newClaim, ...score(newClaim, date, rules) });
+        });
+        return updated.map((c) => ({ ...c, ...score(c, date, rules) }));
+      });
+
+      if (unmatchedItems.length) {
+        setUnmatched((prev) => [...unmatchedItems, ...prev]);
+      }
+
+      const newTriage = {};
+      createdDenials.forEach((denialId) => {
+        const claim = claims.find((c) => c.id === denialId) || initClaims.find((c) => c.id === denialId);
+        if (!claim) return;
+        newTriage[denialId] = runTriage(claim, claim);
+      });
+      if (Object.keys(newTriage).length) {
+        setTriageResults((prev) => ({ ...prev, ...newTriage }));
+      }
+
+      setUploads((prev) => prev.map((u) => (u.id === uploadId ? { ...u, status: 'triaged' } : u)));
+      logAudit({
+        action: 'Archivo procesado',
+        claimId: 'INGEST',
+        detail: `${file.name} → ${type}`,
+        source: 'system',
+      });
+    }
+  };
+
+  const downloadSample = (type) => {
+    const content =
+      type === '835'
+        ? 'CLP*CLM-010*1*1250*950*300*12*12345*11~'
+        : 'TRN*1*CLM-010*123456789~STC*A1:19*20240101*U*CO:16~';
+    const blob = new Blob([content], { type: 'text/plain' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `sample-${type}.txt`;
+    link.click();
+  };
+
+  const resolveUnmatched = (itemId) => {
+    setUnmatched((prev) => prev.filter((u) => u.id !== itemId));
+    logAudit({
+      action: 'Usuario resolvió unmatched',
+      claimId: itemId,
+      detail: 'Asociado manualmente',
+      source: 'user',
+    });
   };
 
   const updateStatus = (id, status) => {
@@ -615,6 +862,7 @@ Paciente: ${patientName}
       detail: 'Estado y apelación actualizados',
       source: 'system',
     });
+    setView('audit');
   };
 
   const priorityClass = (prio) =>
@@ -647,7 +895,10 @@ Paciente: ${patientName}
         <nav className="flex-1 p-1 space-y-1">
           {[
             ['dashboard', BarChart3, 'Dashboard'],
+            ['upload', Upload, 'Upload Center'],
             ['denials', AlertCircle, 'Denials'],
+            ['unmatched', Users, 'Unmatched'],
+            ['review', History, 'Needs Review'],
             ['payments', DollarSign, 'Pagos'],
             ['audit', History, 'Auditoría'],
             ['how', FileText, 'Cómo funciona'],
@@ -679,13 +930,19 @@ Paciente: ${patientName}
           <span className="font-semibold">
             {view === 'dashboard'
               ? 'Dashboard'
-              : view === 'denials'
-                ? 'Denials'
-                : view === 'payments'
-                  ? 'Pagos'
-                  : view === 'how'
-                    ? 'Cómo funciona'
-                    : 'Auditoría'}
+              : view === 'upload'
+                ? 'Upload Center'
+                : view === 'denials'
+                  ? 'Denials'
+                  : view === 'unmatched'
+                    ? 'Unmatched'
+                    : view === 'review'
+                      ? 'Needs Review'
+                      : view === 'payments'
+                        ? 'Pagos'
+                        : view === 'how'
+                          ? 'Cómo funciona'
+                          : 'Auditoría'}
           </span>
           <div className="flex items-center gap-2">
             <span className="bg-slate-100 px-1.5 py-0.5 rounded flex items-center gap-1">
@@ -728,6 +985,68 @@ Paciente: ${patientName}
         </header>
 
         <main className="flex-1 overflow-auto p-2">
+          {view === 'upload' && (
+            <div className="space-y-2">
+              <div className="bg-white rounded p-2 border">
+                <h2 className="font-semibold">Upload Center</h2>
+                <p className="text-slate-600 mt-1">
+                  Sube archivos 277CA y 835. El sistema detecta, parsea y ejecuta triage IA.
+                </p>
+                <div className="mt-2 flex items-center gap-2">
+                  <label className="px-3 py-1 border rounded cursor-pointer bg-white hover:bg-slate-50">
+                    Cargar archivos
+                    <input
+                      type="file"
+                      className="hidden"
+                      multiple
+                      onChange={(e) => {
+                        if (e.target.files?.length) {
+                          handleUploadFiles(e.target.files);
+                          e.target.value = '';
+                        }
+                      }}
+                    />
+                  </label>
+                  <button onClick={() => downloadSample('277ca')} className="px-3 py-1 border rounded hover:bg-slate-50">
+                    Descargar ejemplo 277CA
+                  </button>
+                  <button onClick={() => downloadSample('835')} className="px-3 py-1 border rounded hover:bg-slate-50">
+                    Descargar ejemplo 835
+                  </button>
+                </div>
+              </div>
+              <div className="bg-white rounded p-2 border">
+                <p className="font-semibold">Progreso de archivos</p>
+                {uploads.length ? (
+                  <div className="mt-2 space-y-2">
+                    {uploads.map((u) => (
+                      <div key={u.id} className="p-2 border rounded bg-slate-50">
+                        <div className="flex justify-between">
+                          <span className="font-medium">{u.name}</span>
+                          <span className="text-slate-500">{u.type}</span>
+                        </div>
+                        <div className="mt-1 flex items-center gap-2 text-xs">
+                          <span className={`px-2 py-0.5 rounded ${u.status === 'received' ? 'bg-slate-200' : 'bg-emerald-100 text-emerald-700'}`}>
+                            Recibido
+                          </span>
+                          <span className={`px-2 py-0.5 rounded ${u.status === 'parsed' || u.status === 'triaged' ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-200'}`}>
+                            Parseado
+                          </span>
+                          <span className={`px-2 py-0.5 rounded ${u.status === 'triaged' ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-200'}`}>
+                            Triage IA listo
+                          </span>
+                          {u.status === 'needs_review' ? <span className="text-red-600">Needs Review</span> : null}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-slate-400 mt-1">Sin archivos cargados todavía.</p>
+                )}
+              </div>
+            </div>
+          )}
+
           {view === 'dashboard' && (
             <div className="space-y-2">
               <div className="grid grid-cols-5 gap-1">
@@ -952,6 +1271,36 @@ Paciente: ${patientName}
                       <p className="font-semibold text-emerald-700">Acción AI</p>
                       <p className="text-emerald-800">{sel.action}</p>
                     </div>
+                    {triageResults[sel.id] ? (
+                      <div className="p-2 bg-white border rounded">
+                        <div className="flex justify-between items-center">
+                          <span className="font-semibold">Triage IA</span>
+                          <button
+                            onClick={() => applyTriage(sel.id)}
+                            className="px-2 py-0.5 bg-emerald-600 text-white rounded"
+                          >
+                            Aplicar sugerencias
+                          </button>
+                        </div>
+                        <p className="text-slate-600 mt-1">{triageResults[sel.id].suggested_action_short}</p>
+                        <ul className="text-slate-500 text-xs mt-1 list-disc list-inside">
+                          {triageResults[sel.id].suggested_action_steps.map((step) => (
+                            <li key={step}>{step}</li>
+                          ))}
+                        </ul>
+                        <p className="text-slate-400 text-xs mt-1">
+                          Docs sugeridos: {triageResults[sel.id].required_documents.join(', ')}
+                        </p>
+                        <p className="text-slate-400 text-xs mt-1">
+                          Recomendación de apelación: {triageResults[sel.id].appeal_recommended ? 'Sí' : 'No'} •{' '}
+                          {triageResults[sel.id].appeal_angle}
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="p-2 bg-slate-50 border rounded text-slate-500 text-xs">
+                        Sin triage IA todavía. Sube un 277CA/835 en Upload Center para generar sugerencias.
+                      </div>
+                    )}
                     <div className="p-1.5 bg-slate-50 rounded">
                       <div className="flex items-center justify-between">
                         <p className="font-semibold">Scoring</p>
@@ -1007,6 +1356,73 @@ Paciente: ${patientName}
                     </div>
                   </div>
                 </div>
+              )}
+            </div>
+          )}
+
+          {view === 'unmatched' && (
+            <div className="bg-white rounded p-2 border">
+              <div className="flex justify-between mb-2">
+                <span className="font-semibold">Unmatched ({unmatched.length})</span>
+                <span className="text-slate-400">Requiere revisión humana</span>
+              </div>
+              {unmatched.length ? (
+                <div className="space-y-2">
+                  {unmatched.map((item) => (
+                    <div key={item.id} className="p-2 bg-slate-50 rounded flex justify-between items-center">
+                      <div>
+                        <p className="font-medium">{item.id}</p>
+                        <p className="text-slate-500 text-xs">{item.reason}</p>
+                        <p className="text-slate-400 text-xs">Sugerencia IA: {item.suggestion}</p>
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => resolveUnmatched(item.id)}
+                          className="px-2 py-1 border rounded hover:bg-slate-100"
+                        >
+                          Confirmar match
+                        </button>
+                        <button
+                          onClick={() => resolveUnmatched(item.id)}
+                          className="px-2 py-1 bg-emerald-600 text-white rounded"
+                        >
+                          Crear claim
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-slate-400">Sin elementos pendientes.</p>
+              )}
+            </div>
+          )}
+
+          {view === 'review' && (
+            <div className="bg-white rounded p-2 border">
+              <div className="flex justify-between mb-2">
+                <span className="font-semibold">Needs Review ({needsReview.length})</span>
+                <span className="text-slate-400">Archivos sin parseo</span>
+              </div>
+              {needsReview.length ? (
+                <div className="space-y-2">
+                  {needsReview.map((item) => (
+                    <div key={item.id} className="p-2 bg-slate-50 rounded flex justify-between items-center">
+                      <div>
+                        <p className="font-medium">{item.name}</p>
+                        <p className="text-slate-500 text-xs">{item.reason}</p>
+                      </div>
+                      <button
+                        onClick={() => setNeedsReview((prev) => prev.filter((r) => r.id !== item.id))}
+                        className="px-2 py-1 border rounded hover:bg-slate-100"
+                      >
+                        Marcar resuelto
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-slate-400">Sin archivos pendientes.</p>
               )}
             </div>
           )}
