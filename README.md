@@ -27,7 +27,9 @@ node server/poller.js
 
 ### Endpoints demo
 - `POST /api/v1/uploads/edi` (JSON `{ tenantId, fileName, content }`)
+- `GET /api/v1/uploads/edi`
 - `GET /api/v1/uploads/edi/:id/status`
+- `POST /api/v1/uploads/edi/retry`
 - `GET /api/v1/integrations`
 - `POST /api/v1/integrations`
 - `POST /api/v1/ai/triage/run`
@@ -43,4 +45,10 @@ npm run preview
 ## Testing
 ```bash
 npm run build
+node server/tests.js
 ```
+
+## Plan por etapas
+1. **Hoy (MVP demo)**: Upload Center, ingestión básica, triage local y tutorial guiado.
+2. **Siguiente**: Persistencia real en Postgres + colas BullMQ + matching avanzado.
+3. **Producción**: Conectores SFTP reales, monitoreo y exportación automatizada.

@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
-import { detectEdiType, parse835, parse277, normalizeClaimEvent } from './parsers.js';
+import { detectEdiType, parseX12, parseCsvWorkqueue, normalizeClaimEvent } from './parsers.js';
 import { runDemoTriage } from './triage.js';
 
 const storageDir = path.resolve('server/storage');
@@ -53,6 +53,12 @@ const saveRawFile = (fileName, content, checksum) => {
   return filePath;
 };
 
+const matchClaim = (row) => {
+  return state.claims.find((c) =>
+    [row.externalId, row.payerClaimNumber, row.trackingNumber].some((id) => id && (c.externalId === id || c.payerClaimNumber === id || c.trackingNumber === id))
+  );
+};
+
 const upsertClaim = (normalized) => {
   const existing = state.claims.find((c) => c.externalId === normalized.externalId);
   if (existing) {
@@ -64,11 +70,15 @@ const upsertClaim = (normalized) => {
 };
 
 const addDenial = (denial) => {
-  state.denials.push(denial);
+  const record = { ...denial, id: `den-${Date.now()}` };
+  state.denials.push(record);
+  return record;
 };
 
 const addPayment = (payment) => {
-  state.payments.push(payment);
+  const record = { ...payment, id: `pay-${Date.now()}` };
+  state.payments.push(record);
+  return record;
 };
 
 const checksum = (content) => crypto.createHash('sha256').update(content).digest('hex');
@@ -96,20 +106,20 @@ const processEdiFile = ({ tenantId, fileName, content }) => {
   state.ediFiles.unshift(ediFile);
   writeAudit({ action: 'ingest_start', detail: `${fileName} (${type})`, correlationId });
 
-  if (type === 'unknown') {
+  if (type === 'unknown' || type === 'pdf') {
     ediFile.status = 'failed';
     state.unmatched.unshift({
       id: `unmatched-${Date.now()}`,
       externalId: null,
-      reason: 'Tipo no reconocido',
+      reason: type === 'pdf' ? 'PDF requiere revisión humana' : 'Tipo no reconocido',
       fileName,
-      suggestion: 'Verificar que el archivo sea 277CA o 835.',
+      suggestion: 'Subir 277CA/835 o aprobar mapeo manual.',
     });
     writeAudit({ action: 'ingest_fail', detail: 'Tipo no reconocido', correlationId });
     return { status: 'needs_review', correlationId };
   }
 
-  const parsed = type === '835' ? parse835(content) : parse277(content);
+  const parsed = type === 'csv' ? parseCsvWorkqueue(content) : parseX12(type, content);
   if (!parsed.length) {
     ediFile.status = 'failed';
     state.unmatched.unshift({
@@ -124,16 +134,19 @@ const processEdiFile = ({ tenantId, fileName, content }) => {
   }
 
   parsed.forEach((row) => {
-    const normalized = normalizeClaimEvent(row, type);
-    const claim = upsertClaim(normalized.claim);
+    const normalized = normalizeClaimEvent(row, type === 'csv' ? '277CA' : type);
+    const existing = matchClaim(row);
+    const claim = existing ? upsertClaim({ ...existing, ...normalized.claim }) : upsertClaim(normalized.claim);
     if (normalized.denial) {
-      addDenial({ ...normalized.denial, claimId: claim.externalId, correlationId });
+      const denial = addDenial({ ...normalized.denial, claimId: claim.externalId, correlationId });
+      claim.lastDenialId = denial.id;
       const triage = runDemoTriage(claim, normalized.denial);
       claim.suggestedAction = triage.suggested_action_short;
       claim.triage = triage;
     }
     if (normalized.payment) {
-      addPayment({ ...normalized.payment, claimId: claim.externalId, correlationId });
+      const payment = addPayment({ ...normalized.payment, claimId: claim.externalId, correlationId });
+      claim.lastPaymentId = payment.id;
     }
   });
 
@@ -146,4 +159,5 @@ export const store = {
   state,
   processEdiFile,
   writeAudit,
+  matchClaim,
 };

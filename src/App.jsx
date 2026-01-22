@@ -619,7 +619,9 @@ export default function App() {
     const content =
       type === '835'
         ? 'CLP*CLM-010*1*1250*950*300*12*12345*11~'
-        : 'TRN*1*CLM-010*123456789~STC*A1:19*20240101*U*CO:16~';
+        : type === '277ca'
+          ? 'TRN*1*CLM-010*123456789~STC*A1:19*20240101*U*CO:16~'
+          : 'claim_id,denial_code,denial_reason,amount\nCLM-010,CO-16,Falta info,500';
     const blob = new Blob([content], { type: 'text/plain' });
     const link = document.createElement('a');
     link.href = URL.createObjectURL(blob);
@@ -936,7 +938,7 @@ Paciente: ${patientName}
         <nav className="flex-1 p-1 space-y-1">
           {[
             ['dashboard', BarChart3, 'Dashboard'],
-            ['implementation', CheckCircle, 'Implementación'],
+            ['implementation', CheckCircle, 'Conecta tu fuente'],
             ['integrations', Users, 'Integraciones'],
             ['upload', Upload, 'Upload Center'],
             ['denials', AlertCircle, 'Denials'],
@@ -944,7 +946,7 @@ Paciente: ${patientName}
             ['review', History, 'Errores'],
             ['payments', DollarSign, 'Pagos'],
             ['audit', History, 'Auditoría'],
-            ['how', FileText, 'Cómo funciona'],
+            ['how', FileText, 'Aprender el flujo'],
           ].map(([id, Icon, label]) => (
             <button
               key={id}
@@ -974,7 +976,7 @@ Paciente: ${patientName}
             {view === 'dashboard'
               ? 'Dashboard'
               : view === 'implementation'
-                ? 'Implementación'
+                ? 'Conecta tu fuente'
                 : view === 'integrations'
                   ? 'Integraciones'
                   : view === 'upload'
@@ -987,8 +989,8 @@ Paciente: ${patientName}
                           ? 'Errores de ingestión'
                           : view === 'payments'
                             ? 'Pagos'
-                            : view === 'how'
-                              ? 'Cómo funciona'
+                        : view === 'how'
+                          ? 'Aprender el flujo'
                               : 'Auditoría'}
           </span>
           <div className="flex items-center gap-2">
@@ -1035,27 +1037,37 @@ Paciente: ${patientName}
           {view === 'implementation' && (
             <div className="space-y-2">
               <div className="bg-white rounded p-2 border">
-                <h2 className="font-semibold">Implementación en 3 pasos</h2>
-                <p className="text-slate-600 mt-1">Camino realista para pasar de piloto a producción sin fricción.</p>
+                <h2 className="font-semibold">Conecta tu fuente</h2>
+                <p className="text-slate-600 mt-1">Elige cómo llegan los denials en el MVP.</p>
               </div>
               <div className="grid grid-cols-3 gap-2">
                 {[
                   {
-                    title: 'Paso 1 · Conectar o cargar',
-                    body: 'Conecta SFTP o sube archivos manualmente para iniciar el piloto.',
+                    title: 'Modo A · Carga manual',
+                    body: 'Sube 277CA/835/CSV en Upload Center. Ideal para el piloto.',
+                    action: () => setView('upload'),
                   },
                   {
-                    title: 'Paso 2 · Subir ejemplo',
-                    body: 'Carga un 277CA/835 de muestra y valida el parseo en Upload Center.',
+                    title: 'Modo B · SFTP',
+                    body: 'Configura una carpeta SFTP para ingestión automática diaria.',
+                    action: () => setView('integrations'),
                   },
                   {
-                    title: 'Paso 3 · Activar automático',
-                    body: 'Deja los archivos diarios en la carpeta segura y la cola se actualiza sola.',
+                    title: 'Modo C · API clearinghouse',
+                    body: 'Coming soon. Mostramos la estructura sin integración real.',
+                    action: null,
                   },
                 ].map((step) => (
                   <div key={step.title} className="bg-white rounded p-2 border">
                     <p className="font-semibold">{step.title}</p>
                     <p className="text-slate-600 mt-1">{step.body}</p>
+                    {step.action ? (
+                      <button onClick={step.action} className="mt-2 px-2 py-1 border rounded hover:bg-slate-50">
+                        Ir ahora
+                      </button>
+                    ) : (
+                      <span className="mt-2 inline-block text-xs text-slate-400">Próximamente</span>
+                    )}
                   </div>
                 ))}
               </div>
@@ -1091,6 +1103,7 @@ Paciente: ${patientName}
                         <p className="text-slate-500 text-xs">
                           {int.host} • {int.path} • {int.schedule} • {int.timezone}
                         </p>
+                        <p className="text-slate-400 text-xs">Modo C (API clearinghouse): Coming soon</p>
                       </div>
                       <div className="text-right text-xs text-slate-500">
                         <p>Último pull: {int.lastPull}</p>
@@ -1106,10 +1119,19 @@ Paciente: ${patientName}
 
           {view === 'upload' && (
             <div className="space-y-2">
-              <div className="bg-white rounded p-2 border">
+              <div
+                className="bg-white rounded p-2 border border-dashed"
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  if (e.dataTransfer.files?.length) {
+                    handleUploadFiles(e.dataTransfer.files);
+                  }
+                }}
+              >
                 <h2 className="font-semibold">Upload Center</h2>
                 <p className="text-slate-600 mt-1">
-                  Sube archivos 277CA y 835. El sistema detecta, parsea y ejecuta triage IA.
+                  Sube archivos 277CA, 835 o CSV. El sistema detecta, parsea y ejecuta triage IA.
                 </p>
                 <div className="mt-2 flex items-center gap-2">
                   <label className="px-3 py-1 border rounded cursor-pointer bg-white hover:bg-slate-50">
@@ -1131,6 +1153,9 @@ Paciente: ${patientName}
                   </button>
                   <button onClick={() => downloadSample('835')} className="px-3 py-1 border rounded hover:bg-slate-50">
                     Descargar ejemplo 835
+                  </button>
+                  <button onClick={() => downloadSample('csv')} className="px-3 py-1 border rounded hover:bg-slate-50">
+                    Descargar ejemplo CSV
                   </button>
                 </div>
               </div>
@@ -1644,20 +1669,20 @@ Paciente: ${patientName}
             </div>
           )}
 
-          {view === 'how' && (
-            <div className="space-y-2">
-              <div className="bg-white rounded p-2 border">
-                <h2 className="font-semibold">Cómo funciona Denials Zero Desk</h2>
-                <p className="text-slate-600 mt-1">
-                  Flujo simple pensado para equipos no técnicos: cargar denials, priorizar, ejecutar acciones y dejar trazabilidad.
-                </p>
-              </div>
-              <div className="grid grid-cols-3 gap-2">
-                {[
-                  { title: '1. Llegada de denials', body: 'El equipo sube archivos o integra un envío diario. La cola se llena sola.' },
+              {view === 'how' && (
+                <div className="space-y-2">
+                  <div className="bg-white rounded p-2 border">
+                    <h2 className="font-semibold">Cómo funciona Denials Zero Desk</h2>
+                    <p className="text-slate-600 mt-1">
+                      Flujo simple pensado para equipos no técnicos: cargar denials, priorizar, ejecutar acciones y dejar trazabilidad.
+                    </p>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    {[
+                  { title: '1. Llegada de denials', body: '837 se envía al clearinghouse; 277CA y 835 regresan y alimentan la cola.' },
                   { title: '2. Priorización', body: 'El sistema ordena por monto, antigüedad y reglas del pagador.' },
                   { title: '3. Acción y apelación', body: 'Se aplican pasos sugeridos y se genera un borrador de apelación.' },
-                ].map((card) => (
+                    ].map((card) => (
                   <div key={card.title} className="bg-white rounded p-2 border">
                     <p className="font-semibold">{card.title}</p>
                     <p className="text-slate-600 mt-1">{card.body}</p>
@@ -1665,31 +1690,38 @@ Paciente: ${patientName}
                 ))}
               </div>
               <div className="bg-white rounded p-2 border">
-                <p className="font-semibold">Piloto sin integraciones</p>
+                <p className="font-semibold">Modo A · Carga manual</p>
                 <p className="text-slate-600 mt-1">
-                  El cliente exporta archivos de su sistema y los sube manualmente. En minutos ve la cola priorizada y acciones sugeridas.
+                  El cliente sube 277CA/835/CSV al Upload Center. El sistema detecta, parsea y crea la cola priorizada.
                 </p>
-                <p className="font-semibold mt-2">Producción con integración ligera</p>
+                <p className="font-semibold mt-2">Modo B · SFTP</p>
                 <p className="text-slate-600 mt-1">
-                  Se automatiza el envío diario de archivos. El equipo sigue trabajando igual, solo que la cola se actualiza sola.
+                  Se configura una carpeta segura. El sistema descarga archivos diarios y los procesa igual que la carga manual.
+                </p>
+                <p className="font-semibold mt-2">Modo C · API clearinghouse</p>
+                <p className="text-slate-600 mt-1">
+                  Próximamente: integración directa vía API. En este MVP solo mostramos la estructura.
                 </p>
                 <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-slate-600">
                   <div className="bg-slate-50 rounded p-2">
                     <p className="font-semibold">¿De dónde salen los denials?</p>
-                    <p>De los archivos 277CA y 835 que genera el clearinghouse.</p>
+                    <p>De 277CA y ajustes en 835 (ERA) con códigos de razón.</p>
                   </div>
                   <div className="bg-slate-50 rounded p-2">
                     <p className="font-semibold">¿Qué debe hacer el cliente?</p>
-                    <p>Conectar SFTP o subir archivos manualmente en Upload Center.</p>
+                    <p>Conectar SFTP o subir manualmente los archivos del clearinghouse.</p>
                   </div>
                   <div className="bg-slate-50 rounded p-2">
                     <p className="font-semibold">¿Qué necesitamos?</p>
-                    <p>Credenciales SFTP, ids de pagador y un sample de 277CA/835.</p>
+                    <p>Credenciales SFTP, ids de pagador y un sample 277CA/835.</p>
                   </div>
                   <div className="bg-slate-50 rounded p-2">
                     <p className="font-semibold">¿Qué pasa con errores?</p>
                     <p>Van a Errores de ingestión con motivo claro para revisión.</p>
                   </div>
+                </div>
+                <div className="mt-2 text-xs text-slate-500">
+                  Descarga ejemplos en Upload Center y vuelve a subirlos para ver el flujo completo.
                 </div>
               </div>
             </div>

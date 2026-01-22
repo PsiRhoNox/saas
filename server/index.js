@@ -1,5 +1,6 @@
 import http from 'http';
 import { parse } from 'url';
+import fs from 'fs';
 import { store } from './store.js';
 
 const parseBody = (req) =>
@@ -36,6 +37,19 @@ const server = http.createServer(async (req, res) => {
     const id = pathname.split('/').pop();
     const upload = store.state.ediFiles.find((f) => f.id === id);
     return send(res, 200, { upload });
+  }
+
+  if (req.method === 'GET' && pathname === '/api/v1/uploads/edi') {
+    return send(res, 200, { uploads: store.state.ediFiles });
+  }
+
+  if (req.method === 'POST' && pathname === '/api/v1/uploads/edi/retry') {
+    const body = await parseBody(req);
+    const file = store.state.ediFiles.find((f) => f.id === body.id);
+    if (!file) return send(res, 404, { error: 'file not found' });
+    const content = fs.readFileSync(file.rawPath, 'utf8');
+    const result = store.processEdiFile({ tenantId: file.tenantId, fileName: file.fileName, content });
+    return send(res, 200, { status: result.status, correlationId: result.correlationId });
   }
 
   if (req.method === 'GET' && pathname === '/api/v1/integrations') {
