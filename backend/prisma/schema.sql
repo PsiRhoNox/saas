@@ -6,6 +6,12 @@ CREATE TABLE tenants (
   name TEXT NOT NULL
 );
 
+CREATE TABLE payers (
+  id UUID PRIMARY KEY,
+  tenant_id UUID REFERENCES tenants(id),
+  name TEXT NOT NULL
+);
+
 CREATE TABLE payer_rules (
   id UUID PRIMARY KEY,
   tenant_id UUID REFERENCES tenants(id),
@@ -16,6 +22,30 @@ CREATE TABLE payer_rules (
   active_to TIMESTAMP NOT NULL,
   CHECK (active_to > active_from),
   EXCLUDE USING GIST (tenant_id WITH =, payer_name WITH =, tsrange(active_from, active_to, '[]') WITH &&)
+);
+
+CREATE TABLE contract_terms_lite (
+  id UUID PRIMARY KEY,
+  tenant_id UUID REFERENCES tenants(id),
+  payer_id UUID REFERENCES payers(id),
+  effective_start TIMESTAMP NOT NULL,
+  effective_end TIMESTAMP NOT NULL,
+  default_expected_percent_of_charge NUMERIC NOT NULL,
+  notes TEXT,
+  CHECK (effective_end > effective_start),
+  EXCLUDE USING GIST (tenant_id WITH =, payer_id WITH =, tsrange(effective_start, effective_end, '[]') WITH &&)
+);
+
+CREATE TABLE contract_term_overrides (
+  id UUID PRIMARY KEY,
+  tenant_id UUID REFERENCES tenants(id),
+  payer_id UUID REFERENCES payers(id),
+  cpt_code TEXT NOT NULL,
+  effective_start TIMESTAMP NOT NULL,
+  effective_end TIMESTAMP NOT NULL,
+  expected_percent_of_charge NUMERIC NOT NULL,
+  CHECK (effective_end > effective_start),
+  EXCLUDE USING GIST (tenant_id WITH =, payer_id WITH =, cpt_code WITH =, tsrange(effective_start, effective_end, '[]') WITH &&)
 );
 
 CREATE TABLE edi_files (
@@ -65,6 +95,22 @@ CREATE TABLE payments (
   paid_amount NUMERIC,
   charged_amount NUMERIC,
   patient_responsibility NUMERIC
+);
+
+CREATE TABLE underpayment_items (
+  id UUID PRIMARY KEY,
+  tenant_id UUID REFERENCES tenants(id),
+  claim_id UUID REFERENCES claims(id),
+  payment_id UUID REFERENCES payments(id),
+  payer_id UUID REFERENCES payers(id),
+  detected_at TIMESTAMP DEFAULT NOW(),
+  expected_amount NUMERIC,
+  actual_paid_amount NUMERIC,
+  variance_amount NUMERIC,
+  cas_group_code TEXT,
+  cas_reason_code TEXT,
+  status TEXT,
+  recommended_next_step TEXT
 );
 
 CREATE TABLE unmatched_items (
@@ -135,11 +181,14 @@ CREATE TABLE documents (
 
 ALTER TABLE tenants ENABLE ROW LEVEL SECURITY;
 ALTER TABLE payer_rules ENABLE ROW LEVEL SECURITY;
+ALTER TABLE contract_terms_lite ENABLE ROW LEVEL SECURITY;
+ALTER TABLE contract_term_overrides ENABLE ROW LEVEL SECURITY;
 ALTER TABLE edi_files ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ingest_runs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE claims ENABLE ROW LEVEL SECURITY;
 ALTER TABLE denials ENABLE ROW LEVEL SECURITY;
 ALTER TABLE payments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE underpayment_items ENABLE ROW LEVEL SECURITY;
 ALTER TABLE unmatched_items ENABLE ROW LEVEL SECURITY;
 ALTER TABLE audit_log ENABLE ROW LEVEL SECURITY;
 ALTER TABLE patients ENABLE ROW LEVEL SECURITY;
@@ -154,6 +203,10 @@ CREATE POLICY tenant_isolation ON tenants
   USING (id = current_setting('app.tenant_id')::uuid);
 CREATE POLICY tenant_isolation ON payer_rules
   USING (tenant_id = current_setting('app.tenant_id')::uuid);
+CREATE POLICY tenant_isolation ON contract_terms_lite
+  USING (tenant_id = current_setting('app.tenant_id')::uuid);
+CREATE POLICY tenant_isolation ON contract_term_overrides
+  USING (tenant_id = current_setting('app.tenant_id')::uuid);
 CREATE POLICY tenant_isolation ON edi_files
   USING (tenant_id = current_setting('app.tenant_id')::uuid);
 CREATE POLICY tenant_isolation ON ingest_runs
@@ -163,6 +216,8 @@ CREATE POLICY tenant_isolation ON claims
 CREATE POLICY tenant_isolation ON denials
   USING (tenant_id = current_setting('app.tenant_id')::uuid);
 CREATE POLICY tenant_isolation ON payments
+  USING (tenant_id = current_setting('app.tenant_id')::uuid);
+CREATE POLICY tenant_isolation ON underpayment_items
   USING (tenant_id = current_setting('app.tenant_id')::uuid);
 CREATE POLICY tenant_isolation ON unmatched_items
   USING (tenant_id = current_setting('app.tenant_id')::uuid);

@@ -457,6 +457,26 @@ export default function App() {
   const [selectedIssueId, setSelectedIssueId] = useState('');
   const [selectedPlaybookId, setSelectedPlaybookId] = useState('');
   const [programSummary, setProgramSummary] = useState('');
+  const [contractTerms, setContractTerms] = useState([]);
+  const [contractOverrides, setContractOverrides] = useState([]);
+  const [underpaymentItems, setUnderpaymentItems] = useState([]);
+  const [contractDraft, setContractDraft] = useState({
+    payer: '',
+    effectiveStart: '',
+    effectiveEnd: '',
+    expectedPercent: '',
+    notes: '',
+  });
+  const [overrideDraft, setOverrideDraft] = useState({
+    payer: '',
+    cptCode: '',
+    effectiveStart: '',
+    effectiveEnd: '',
+    expectedPercent: '',
+  });
+  const [contractError, setContractError] = useState('');
+  const [underpaymentFilter, setUnderpaymentFilter] = useState('all');
+  const [selectedUnderpaymentId, setSelectedUnderpaymentId] = useState(null);
   const [integrations, setIntegrations] = useState([
     {
       id: 'int-001',
@@ -490,6 +510,9 @@ export default function App() {
       setPlaybooks(stored.playbooks || []);
       setPlaybookUsage(stored.playbookUsage || {});
       setPreventionIssues(stored.preventionIssues || []);
+      setContractTerms(stored.contractTerms || []);
+      setContractOverrides(stored.contractOverrides || []);
+      setUnderpaymentItems(stored.underpaymentItems || []);
       setIntegrations(stored.integrations || integrations);
       if (stored.date) setDate(new Date(stored.date));
       const seeded = hydrateClaims(stored.claims || initClaims, stored.date || date, stored.rules || defaultRules);
@@ -560,6 +583,9 @@ export default function App() {
       playbooks,
       playbookUsage,
       preventionIssues,
+      contractTerms,
+      contractOverrides,
+      underpaymentItems,
       integrations,
     });
   }, [
@@ -581,6 +607,9 @@ export default function App() {
     playbooks,
     playbookUsage,
     preventionIssues,
+    contractTerms,
+    contractOverrides,
+    underpaymentItems,
     integrations,
   ]);
 
@@ -649,13 +678,11 @@ export default function App() {
             claims.reduce((sum, c) => sum + (new Date() - new Date(c.denied || c.submitted)) / 86400000, 0) / claims.length
           )
         : 0;
-    const topCauses = [...claims]
-      .reduce((acc, c) => {
-        const key = c.root_cause_bucket || c.code || 'unknown';
-        acc[key] = (acc[key] || 0) + c.amount;
-        return acc;
-      }, {})
-      ;
+    const topCauses = [...claims].reduce((acc, c) => {
+      const key = c.root_cause_bucket || c.code || 'unknown';
+      acc[key] = (acc[key] || 0) + c.amount;
+      return acc;
+    }, {});
     const topCauseEntries = Object.entries(topCauses)
       .map(([key, total]) => ({ key, total }))
       .sort((a, b) => b.total - a.total)
@@ -858,6 +885,120 @@ export default function App() {
       source: 'user',
       requestId: `playbook-${playbook.id}-v${playbook.version}`,
     });
+  };
+
+  const hasOverlap = (ranges, next) => {
+    const start = new Date(next.effectiveStart).getTime();
+    const end = new Date(next.effectiveEnd).getTime();
+    return ranges.some((item) => {
+      const itemStart = new Date(item.effectiveStart).getTime();
+      const itemEnd = new Date(item.effectiveEnd).getTime();
+      return start <= itemEnd && end >= itemStart;
+    });
+  };
+
+  const addContractTerm = () => {
+    setContractError('');
+    if (!contractDraft.payer || !contractDraft.effectiveStart || !contractDraft.effectiveEnd || !contractDraft.expectedPercent) {
+      setContractError('Completa todos los campos obligatorios.');
+      return;
+    }
+    if (new Date(contractDraft.effectiveEnd) <= new Date(contractDraft.effectiveStart)) {
+      setContractError('La fecha fin debe ser mayor que la fecha inicio.');
+      return;
+    }
+    const overlaps = hasOverlap(
+      contractTerms.filter((term) => term.payer === contractDraft.payer),
+      contractDraft
+    );
+    if (overlaps) {
+      setContractError('El rango se solapa con otra regla del mismo pagador.');
+      return;
+    }
+    const term = {
+      id: `ct-${Date.now()}`,
+      payer: contractDraft.payer,
+      effectiveStart: contractDraft.effectiveStart,
+      effectiveEnd: contractDraft.effectiveEnd,
+      expectedPercent: Number(contractDraft.expectedPercent),
+      notes: contractDraft.notes,
+      createdAt: new Date().toISOString(),
+    };
+    setContractTerms((prev) => [term, ...prev]);
+    logAudit({
+      action: 'Usuario creó regla Contract Lite',
+      claimId: 'CONTRACT',
+      detail: `${term.payer} ${term.expectedPercent}%`,
+      source: 'user',
+    });
+    setContractDraft({ payer: '', effectiveStart: '', effectiveEnd: '', expectedPercent: '', notes: '' });
+  };
+
+  const addContractOverride = () => {
+    setContractError('');
+    if (
+      !overrideDraft.payer ||
+      !overrideDraft.cptCode ||
+      !overrideDraft.effectiveStart ||
+      !overrideDraft.effectiveEnd ||
+      !overrideDraft.expectedPercent
+    ) {
+      setContractError('Completa todos los campos obligatorios.');
+      return;
+    }
+    if (new Date(overrideDraft.effectiveEnd) <= new Date(overrideDraft.effectiveStart)) {
+      setContractError('La fecha fin debe ser mayor que la fecha inicio.');
+      return;
+    }
+    const overlaps = hasOverlap(
+      contractOverrides.filter((ovr) => ovr.payer === overrideDraft.payer && ovr.cptCode === overrideDraft.cptCode),
+      overrideDraft
+    );
+    if (overlaps) {
+      setContractError('El override se solapa con otro rango para el mismo CPT.');
+      return;
+    }
+    const override = {
+      id: `cto-${Date.now()}`,
+      payer: overrideDraft.payer,
+      cptCode: overrideDraft.cptCode,
+      effectiveStart: overrideDraft.effectiveStart,
+      effectiveEnd: overrideDraft.effectiveEnd,
+      expectedPercent: Number(overrideDraft.expectedPercent),
+      createdAt: new Date().toISOString(),
+    };
+    setContractOverrides((prev) => [override, ...prev]);
+    logAudit({
+      action: 'Usuario creó override de contrato',
+      claimId: 'CONTRACT',
+      detail: `${override.payer} ${override.cptCode} ${override.expectedPercent}%`,
+      source: 'user',
+    });
+    setOverrideDraft({ payer: '', cptCode: '', effectiveStart: '', effectiveEnd: '', expectedPercent: '' });
+  };
+
+  const findContractTerm = (payer, serviceDate) =>
+    contractTerms.find((term) => {
+      if (term.payer !== payer) return false;
+      const date = new Date(serviceDate || new Date().toISOString()).getTime();
+      return date >= new Date(term.effectiveStart).getTime() && date <= new Date(term.effectiveEnd).getTime();
+    });
+
+  const findContractOverride = (payer, cptCode, serviceDate) =>
+    contractOverrides.find((override) => {
+      if (override.payer !== payer || override.cptCode !== cptCode) return false;
+      const date = new Date(serviceDate || new Date().toISOString()).getTime();
+      return date >= new Date(override.effectiveStart).getTime() && date <= new Date(override.effectiveEnd).getTime();
+    });
+
+  const scoreUnderpayment = (item, payerRules) => {
+    const base = payerRules?.[item.payer] || { base: 5, mult: 1 };
+    const days = Math.floor((new Date() - new Date(item.detectedAt)) / 86400000);
+    const variance = Math.min(item.varianceAmount / 1000, 10);
+    const age = Math.min(days / 30, 2);
+    let prio = Math.round(base.base * 3 + variance * 10 + age * 8);
+    prio = Math.max(1, Math.min(99, prio));
+    return { prio, prob: Math.round(Math.max(5, Math.min(95, base.mult * 60 + variance * 2))) };
   };
 
   const buildPreventionSuggestions = () => {
@@ -1380,6 +1521,40 @@ export default function App() {
             summary.payments += 1;
           }
           if (row.charged) target.amount = row.charged;
+          const nonPrAdjustment = denialAdjustments.find((adj) => adj.groupCode !== 'PR');
+          if (row.charged && row.paid !== undefined && nonPrAdjustment) {
+            const serviceDate = target.denied || date.toISOString();
+            const override = findContractOverride(target.payer, target.cpt, serviceDate);
+            const term = findContractTerm(target.payer, serviceDate);
+            const expectedPercent = override?.expectedPercent ?? term?.expectedPercent;
+            const expectedAmount = expectedPercent ? (row.charged * expectedPercent) / 100 : null;
+            const varianceAmount = expectedAmount !== null ? expectedAmount - row.paid : row.charged - row.paid;
+            const hasItem = underpaymentItems.some(
+              (item) => item.claimId === target.id && item.correlationId === fileEntry.id
+            );
+            if (!hasItem && varianceAmount > 0) {
+              const status = expectedPercent ? 'open' : 'needs_contract_rule';
+              const recommended_next_step = expectedPercent
+                ? 'Revisar contrato y reclamar diferencia'
+                : 'Agregar regla Contract Lite';
+              createUnderpaymentItem(
+                {
+                  claimId: target.id,
+                  paymentId: `pay-${fileEntry.id}-${target.id}`,
+                  payer: target.payer,
+                  expectedAmount,
+                  actualPaidAmount: row.paid,
+                  varianceAmount,
+                  casGroupCode: nonPrAdjustment.groupCode,
+                  casReasonCode: nonPrAdjustment.reasonCode,
+                  status,
+                  recommendedNextStep: recommended_next_step,
+                  correlationId: fileEntry.id,
+                },
+                fileEntry.id
+              );
+            }
+          }
         }
 
         if (type === '277CA') {
@@ -1964,6 +2139,24 @@ Paciente: ${patientName}
     unique.forEach((taskType) => createTaskForDenial(claim, taskType, 'ai'));
   };
 
+  const createUnderpaymentItem = (payload, correlationId) => {
+    const item = {
+      id: `up-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      detectedAt: new Date().toISOString(),
+      status: payload.status || 'open',
+      ...payload,
+    };
+    setUnderpaymentItems((prev) => [item, ...prev]);
+    logAudit({
+      action: 'Sistema detectó underpayment',
+      claimId: payload.claimId,
+      detail: `${payload.payer} • $${Math.round(payload.varianceAmount || 0)}`,
+      source: 'system',
+      requestId: correlationId ? `835-${correlationId}` : null,
+      result: 'ok',
+    });
+  };
+
 
   const filtered = claims
     .filter(
@@ -1975,6 +2168,45 @@ Paciente: ${patientName}
     .sort((a, b) => b.prio - a.prio);
 
   const displayName = (claim) => (demoMode ? maskName(claim.patient) : claim.patient);
+
+  const underpaymentScored = useMemo(
+    () =>
+      underpaymentItems.map((item) => ({
+        ...item,
+        ...scoreUnderpayment(item, rules.payerRules),
+      })),
+    [underpaymentItems, rules]
+  );
+
+  const queueItems = useMemo(() => {
+    const denialItems = claims.map((claim) => ({
+      type: 'denial',
+      id: `denial-${claim.id}`,
+      claim,
+      prio: claim.prio,
+      prob: claim.prob,
+    }));
+    const underItems = underpaymentScored.map((item) => ({
+      type: 'underpayment',
+      id: `under-${item.id}`,
+      underpayment: item,
+      claim: claims.find((c) => c.id === item.claimId),
+      prio: item.prio,
+      prob: item.prob,
+    }));
+    return [...denialItems, ...underItems].sort((a, b) => b.prio - a.prio);
+  }, [claims, underpaymentScored]);
+
+  const filteredQueue = queueItems.filter((item) => {
+    if (underpaymentFilter !== 'all' && item.type !== underpaymentFilter) return false;
+    if (item.type === 'denial' && filter !== 'all' && item.claim.status !== filter) return false;
+    const targetId = item.type === 'denial' ? item.claim.id : item.underpayment.claimId;
+    const patientName = item.claim?.patient || '';
+    const match =
+      targetId.toLowerCase().includes(search.toLowerCase()) ||
+      patientName.toLowerCase().includes(search.toLowerCase());
+    return match;
+  });
 
   const resetStorage = () => {
     if (typeof window !== 'undefined') {
@@ -2080,6 +2312,7 @@ Paciente: ${patientName}
   };
 
   const activeRun = ingestionRuns.find((run) => run.id === activeRunId) || ingestionRuns[0];
+  const selectedUnderpayment = underpaymentScored.find((item) => item.id === selectedUnderpaymentId);
 
   return (
     <div className="h-screen flex bg-slate-100 overflow-hidden text-xs">
@@ -2105,6 +2338,8 @@ Paciente: ${patientName}
             ['playbooks', FileText, 'Playbooks'],
             ['prevention', AlertCircle, 'Prevención'],
             ['program', BarChart3, 'Programa'],
+            ['contract', FileText, 'Contract Lite'],
+            ['insights', BarChart3, 'Insights'],
             ['intake', Upload, 'Data Intake'],
             ['ingestions', History, 'Historial de ingestión'],
             ['denials', AlertCircle, 'Denials Inbox'],
@@ -2119,6 +2354,7 @@ Paciente: ${patientName}
               onClick={() => {
                 setView(id);
                 setSel(null);
+                setSelectedUnderpaymentId(null);
               }}
               className={`w-full flex items-center gap-1 px-2 py-1 rounded ${
                 view === id ? 'bg-emerald-600' : 'text-slate-300 hover:bg-slate-800'
@@ -2154,6 +2390,10 @@ Paciente: ${patientName}
                         ? 'Prevención'
                         : view === 'program'
                           ? 'Programa'
+                          : view === 'contract'
+                            ? 'Contract Lite'
+                            : view === 'insights'
+                              ? 'Insights'
                   : view === 'intake'
                     ? 'Data Intake'
                     : view === 'ingestions'
@@ -2814,6 +3054,202 @@ Próximos pasos: reforzar playbooks y cerrar tareas abiertas para prevenir recur
             </div>
           )}
 
+          {view === 'contract' && (
+            <div className="space-y-2">
+              <div className="bg-white rounded p-2 border">
+                <h2 className="font-semibold">Contract Lite</h2>
+                <p className="text-slate-600 mt-1">
+                  Reglas simples por pagador para estimar el expected paid (no es contrato completo).
+                </p>
+              </div>
+              <div className="bg-white rounded p-2 border">
+                <p className="font-semibold">Regla base por pagador</p>
+                <div className="grid grid-cols-2 gap-2 mt-2">
+                  <input
+                    value={contractDraft.payer}
+                    onChange={(e) => setContractDraft((prev) => ({ ...prev, payer: e.target.value }))}
+                    placeholder="Pagador"
+                    className="border rounded p-1"
+                  />
+                  <input
+                    value={contractDraft.expectedPercent}
+                    onChange={(e) => setContractDraft((prev) => ({ ...prev, expectedPercent: e.target.value }))}
+                    placeholder="% esperado sobre charge"
+                    className="border rounded p-1"
+                  />
+                  <input
+                    type="date"
+                    value={contractDraft.effectiveStart}
+                    onChange={(e) => setContractDraft((prev) => ({ ...prev, effectiveStart: e.target.value }))}
+                    className="border rounded p-1"
+                  />
+                  <input
+                    type="date"
+                    value={contractDraft.effectiveEnd}
+                    onChange={(e) => setContractDraft((prev) => ({ ...prev, effectiveEnd: e.target.value }))}
+                    className="border rounded p-1"
+                  />
+                  <input
+                    value={contractDraft.notes}
+                    onChange={(e) => setContractDraft((prev) => ({ ...prev, notes: e.target.value }))}
+                    placeholder="Notas"
+                    className="border rounded p-1 col-span-2"
+                  />
+                </div>
+                {contractError ? <p className="text-red-600 text-xs mt-1">{contractError}</p> : null}
+                <button onClick={addContractTerm} className="mt-2 px-3 py-1 bg-emerald-600 text-white rounded">
+                  Guardar regla
+                </button>
+              </div>
+              <div className="bg-white rounded p-2 border">
+                <p className="font-semibold">Overrides por CPT</p>
+                <div className="grid grid-cols-2 gap-2 mt-2">
+                  <input
+                    value={overrideDraft.payer}
+                    onChange={(e) => setOverrideDraft((prev) => ({ ...prev, payer: e.target.value }))}
+                    placeholder="Pagador"
+                    className="border rounded p-1"
+                  />
+                  <input
+                    value={overrideDraft.cptCode}
+                    onChange={(e) => setOverrideDraft((prev) => ({ ...prev, cptCode: e.target.value }))}
+                    placeholder="CPT"
+                    className="border rounded p-1"
+                  />
+                  <input
+                    value={overrideDraft.expectedPercent}
+                    onChange={(e) => setOverrideDraft((prev) => ({ ...prev, expectedPercent: e.target.value }))}
+                    placeholder="% esperado"
+                    className="border rounded p-1"
+                  />
+                  <input
+                    type="date"
+                    value={overrideDraft.effectiveStart}
+                    onChange={(e) => setOverrideDraft((prev) => ({ ...prev, effectiveStart: e.target.value }))}
+                    className="border rounded p-1"
+                  />
+                  <input
+                    type="date"
+                    value={overrideDraft.effectiveEnd}
+                    onChange={(e) => setOverrideDraft((prev) => ({ ...prev, effectiveEnd: e.target.value }))}
+                    className="border rounded p-1"
+                  />
+                </div>
+                {contractError ? <p className="text-red-600 text-xs mt-1">{contractError}</p> : null}
+                <button onClick={addContractOverride} className="mt-2 px-3 py-1 bg-emerald-600 text-white rounded">
+                  Guardar override
+                </button>
+              </div>
+              <div className="bg-white rounded p-2 border">
+                <p className="font-semibold">Reglas guardadas</p>
+                <div className="mt-2 space-y-2 text-xs">
+                  {contractTerms.map((term) => (
+                    <div key={term.id} className="bg-slate-50 rounded p-2 border">
+                      <p className="font-medium">
+                        {term.payer} • {term.expectedPercent}% ({term.effectiveStart} - {term.effectiveEnd})
+                      </p>
+                      <p className="text-slate-500">{term.notes || 'Sin notas'}</p>
+                    </div>
+                  ))}
+                  {!contractTerms.length ? <p className="text-slate-400">Sin reglas todavía.</p> : null}
+                </div>
+                <p className="font-semibold mt-2">Overrides guardados</p>
+                <div className="mt-2 space-y-2 text-xs">
+                  {contractOverrides.map((override) => (
+                    <div key={override.id} className="bg-slate-50 rounded p-2 border">
+                      <p className="font-medium">
+                        {override.payer} • {override.cptCode} • {override.expectedPercent}% ({override.effectiveStart} - {override.effectiveEnd})
+                      </p>
+                    </div>
+                  ))}
+                  {!contractOverrides.length ? <p className="text-slate-400">Sin overrides todavía.</p> : null}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {view === 'insights' && (
+            <div className="space-y-2">
+              <div className="bg-white rounded p-2 border">
+                <h2 className="font-semibold">Insights</h2>
+                <p className="text-slate-600 mt-1">Agregados simples de denials y underpayments.</p>
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                <div className="bg-white rounded p-2 border">
+                  <p className="font-semibold">Por pagador</p>
+                  <ol className="mt-2 text-xs text-slate-600 list-decimal list-inside">
+                    {Object.entries(
+                      claims.reduce((acc, claim) => {
+                        acc[claim.payer] = (acc[claim.payer] || 0) + (claim.amount || 0);
+                        return acc;
+                      }, underpaymentItems.reduce((acc, item) => {
+                        acc[item.payer] = (acc[item.payer] || 0) + (item.varianceAmount || 0);
+                        return acc;
+                      }, {}))
+                    )
+                      .map(([payer, total]) => ({ payer, total }))
+                      .sort((a, b) => b.total - a.total)
+                      .slice(0, 3)
+                      .map((entry) => (
+                        <li key={entry.payer}>
+                          {entry.payer} • ${Math.round(entry.total).toLocaleString()}
+                        </li>
+                      ))}
+                  </ol>
+                </div>
+                <div className="bg-white rounded p-2 border">
+                  <p className="font-semibold">Por reason code</p>
+                  <ol className="mt-2 text-xs text-slate-600 list-decimal list-inside">
+                    {Object.entries(
+                      claims.reduce((acc, claim) => {
+                        const key = claim.code || 'unknown';
+                        acc[key] = (acc[key] || 0) + (claim.amount || 0);
+                        return acc;
+                      }, underpaymentItems.reduce((acc, item) => {
+                        const key = item.casReasonCode || 'unknown';
+                        acc[key] = (acc[key] || 0) + (item.varianceAmount || 0);
+                        return acc;
+                      }, {}))
+                    )
+                      .map(([code, total]) => ({ code, total }))
+                      .sort((a, b) => b.total - a.total)
+                      .slice(0, 3)
+                      .map((entry) => (
+                        <li key={entry.code}>
+                          {entry.code} • ${Math.round(entry.total).toLocaleString()}
+                        </li>
+                      ))}
+                  </ol>
+                </div>
+                <div className="bg-white rounded p-2 border">
+                  <p className="font-semibold">Por CPT</p>
+                  <ol className="mt-2 text-xs text-slate-600 list-decimal list-inside">
+                    {Object.entries(
+                      claims.reduce((acc, claim) => {
+                        const key = claim.cpt || 'unknown';
+                        acc[key] = (acc[key] || 0) + (claim.amount || 0);
+                        return acc;
+                      }, underpaymentItems.reduce((acc, item) => {
+                        const claim = claims.find((c) => c.id === item.claimId);
+                        const key = claim?.cpt || 'unknown';
+                        acc[key] = (acc[key] || 0) + (item.varianceAmount || 0);
+                        return acc;
+                      }, {}))
+                    )
+                      .map(([cpt, total]) => ({ cpt, total }))
+                      .sort((a, b) => b.total - a.total)
+                      .slice(0, 3)
+                      .map((entry) => (
+                        <li key={entry.cpt}>
+                          {entry.cpt} • ${Math.round(entry.total).toLocaleString()}
+                        </li>
+                      ))}
+                  </ol>
+                </div>
+              </div>
+            </div>
+          )}
+
           {view === 'integrations' && (
             <div className="space-y-2">
               <div className="bg-white rounded p-2 border">
@@ -3109,7 +3545,7 @@ Próximos pasos: reforzar playbooks y cerrar tareas abiertas para prevenir recur
 
           {view === 'denials' && (
             <div className="flex h-full gap-2">
-              <div className={`${sel ? 'w-1/2' : 'w-full'} bg-white rounded border flex flex-col`}>
+              <div className={`${sel || selectedUnderpayment ? 'w-1/2' : 'w-full'} bg-white rounded border flex flex-col`}>
                 <div className="p-1.5 border-b flex gap-1">
                   <div className="flex-1 relative">
                     <Search className="absolute left-1 top-1/2 -translate-y-1/2 w-3 h-3 text-slate-400" />
@@ -3146,36 +3582,73 @@ Próximos pasos: reforzar playbooks y cerrar tareas abiertas para prevenir recur
                     <Download className="w-3 h-3" />
                   </button>
                 </div>
+                <div className="p-1 border-b flex gap-1 text-xs">
+                  {[
+                    ['all', 'Todo'],
+                    ['denial', 'Denials'],
+                    ['underpayment', 'Underpayments'],
+                  ].map(([key, label]) => (
+                    <button
+                      key={key}
+                      onClick={() => setUnderpaymentFilter(key)}
+                      className={`px-2 py-0.5 rounded border ${underpaymentFilter === key ? 'bg-emerald-50 text-emerald-700' : ''}`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
                 <div className="flex-1 overflow-auto">
-                  {filtered.map((c) => (
+                  {filteredQueue.map((item) => {
+                    const claim = item.claim;
+                    if (!claim) return null;
+                    const isUnderpayment = item.type === 'underpayment';
+                    const label = isUnderpayment ? 'Underpayment' : 'Denial';
+                    const amount = isUnderpayment ? item.underpayment.varianceAmount : claim.amount;
+                    const selected = isUnderpayment ? selectedUnderpayment?.id === item.underpayment.id : sel?.id === claim.id;
+                    return (
                     <div
-                      key={c.id}
-                      onClick={() => setSel(c)}
+                      key={item.id}
+                      onClick={() => {
+                        if (isUnderpayment) {
+                          setSelectedUnderpaymentId(item.underpayment.id);
+                          setSel(null);
+                        } else {
+                          setSel(claim);
+                          setSelectedUnderpaymentId(null);
+                        }
+                      }}
                       className={`p-1.5 border-b cursor-pointer hover:bg-slate-50 ${
-                        sel?.id === c.id ? 'bg-emerald-50 border-l-2 border-l-emerald-500' : ''
+                        selected ? 'bg-emerald-50 border-l-2 border-l-emerald-500' : ''
                       }`}
                     >
                       <div className="flex justify-between">
-                      <div className="flex items-center gap-1">
-                        <div className={`w-5 h-5 rounded-full flex items-center justify-center font-bold ${priorityClass(c.prio)}`}>
-                          {c.prio}
-                        </div>
-                        <div>
-                          <p className="font-medium">{displayName(c)}</p>
-                          <p className="text-slate-500">{c.id}</p>
-                        </div>
+                        <div className="flex items-center gap-1">
+                          <div className={`w-5 h-5 rounded-full flex items-center justify-center font-bold ${priorityClass(item.prio)}`}>
+                            {item.prio}
+                          </div>
+                          <div>
+                            <p className="font-medium">{displayName(claim)}</p>
+                            <p className="text-slate-500">
+                              {claim.id} • {label}
+                            </p>
+                          </div>
                         </div>
                         <div className="text-right">
-                          <p className="font-semibold">${c.amount.toLocaleString()}</p>
-                          {statusBadge(c.status)}
+                          <p className="font-semibold">${Math.round(amount).toLocaleString()}</p>
+                          {isUnderpayment ? (
+                            <span className="text-xs text-amber-600">{item.underpayment.status}</span>
+                          ) : (
+                            statusBadge(claim.status)
+                          )}
                         </div>
                       </div>
                       <div className="ml-6 text-slate-500">
-                        {c.payer} • <span className="text-red-600">{c.code}</span> •{' '}
-                        <span className="text-emerald-600">{c.prob}%</span>
+                        {claim.payer} •{' '}
+                        <span className="text-red-600">{isUnderpayment ? item.underpayment.casReasonCode : claim.code}</span> •{' '}
+                        <span className="text-emerald-600">{item.prob}%</span>
                       </div>
                     </div>
-                  ))}
+                  )})}
                 </div>
               </div>
               {sel && (
@@ -3515,6 +3988,45 @@ Próximos pasos: reforzar playbooks y cerrar tareas abiertas para prevenir recur
                       ) : (
                         <p className="text-slate-400 text-xs">Sin apelaciones previas.</p>
                       )}
+                    </div>
+                  </div>
+                </div>
+              )}
+              {selectedUnderpayment && (
+                <div className="w-1/2 bg-white rounded border flex flex-col">
+                  <div className="p-1.5 border-b flex justify-between">
+                    <span className="font-semibold">Underpayment • {selectedUnderpayment.claimId}</span>
+                    <button onClick={() => setSelectedUnderpaymentId(null)}>
+                      <X className="w-3 h-3" />
+                    </button>
+                  </div>
+                  <div className="flex-1 overflow-auto p-2 space-y-2">
+                    <div className="p-2 bg-slate-800 text-white rounded flex justify-between">
+                      <div>
+                        <p className="text-slate-400">Variance</p>
+                        <p className="text-lg font-bold">${Math.round(selectedUnderpayment.varianceAmount).toLocaleString()}</p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-slate-400">Prob</p>
+                        <p className="text-lg font-bold text-emerald-400">{selectedUnderpayment.prob}%</p>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-1">
+                      {[
+                        ['Pagador', selectedUnderpayment.payer],
+                        ['Expected (estimado)', selectedUnderpayment.expectedAmount ? `$${Math.round(selectedUnderpayment.expectedAmount)}` : 'Unknown'],
+                        ['Paid', `$${Math.round(selectedUnderpayment.actualPaidAmount)}`],
+                        ['Reason', selectedUnderpayment.casReasonCode || 'unknown'],
+                      ].map(([label, value]) => (
+                        <div key={label} className="p-1 bg-slate-50 rounded">
+                          <p className="text-slate-500">{label}</p>
+                          <p className="font-medium">{value}</p>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="p-1.5 bg-amber-50 border border-amber-200 rounded">
+                      <p className="font-semibold text-amber-700">Recomendación</p>
+                      <p className="text-amber-800">{selectedUnderpayment.recommendedNextStep}</p>
                     </div>
                   </div>
                 </div>
