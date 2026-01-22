@@ -736,8 +736,8 @@ export default function App() {
   const findClaimMatch = (list, identifiers) =>
     list.find(
       (c) =>
-        (identifiers.payerClaimNumber && c.payerClaimNumber === identifiers.payerClaimNumber) ||
         (identifiers.patientControlNumber && c.patientControlNumber === identifiers.patientControlNumber) ||
+        (identifiers.payerClaimNumber && c.payerClaimNumber === identifiers.payerClaimNumber) ||
         (identifiers.trackingNumber && c.trackingNumber === identifiers.trackingNumber)
     );
 
@@ -929,8 +929,10 @@ export default function App() {
         } else {
           summary.created += 1;
           summary.needsReview += 1;
+          const preferredId =
+            identifiers.patientControlNumber || identifiers.payerClaimNumber || identifiers.trackingNumber || row.claimId || '';
           const newClaim = createNewClaim(
-            identifiers.payerClaimNumber,
+            preferredId,
             row.amount ? Number(row.amount) : 1200,
             index,
             fileEntry.name
@@ -941,7 +943,7 @@ export default function App() {
           target = newClaim;
           unmatchedItems.push({
             id: newClaim.id,
-            suggestion: 'Revisar patient control number',
+            suggestion: identifiers.patientControlNumber ? 'Revisar patient control number' : 'Revisar identificadores de claim',
             reason: 'Claim no encontrado, creado como needs review',
           });
         }
@@ -1679,7 +1681,7 @@ Paciente: ${patientName}
                   },
                   {
                     title: '¿Qué pasa cuando hay mismatch?',
-                    body: 'Si no hay match, se crea como needs review. El equipo revisa y confirma el match.',
+                    body: 'Match MVP: usamos patient control number como ID principal. Si no hay match, se crea como needs review.',
                   },
                   {
                     title: '¿Dónde veo el resultado?',
