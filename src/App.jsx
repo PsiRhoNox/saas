@@ -281,6 +281,20 @@ export default function App() {
   const [unmatched, setUnmatched] = useState([]);
   const [triageResults, setTriageResults] = useState({});
   const [tasks, setTasks] = useState([]);
+  const [integrations, setIntegrations] = useState([
+    {
+      id: 'int-001',
+      name: 'Clearinghouse SFTP (demo)',
+      host: 'sftp.demo-clearinghouse.com',
+      user: 'demo-user',
+      path: '/inbox',
+      schedule: 'Cada 6 horas',
+      timezone: 'UTC-5',
+      lastPull: '2024-01-21 06:00',
+      lastFile: '277ca_20240121.edi',
+      errors: 1,
+    },
+  ]);
 
   useEffect(() => {
     const stored = getStoredState();
@@ -293,6 +307,7 @@ export default function App() {
       setUnmatched(stored.unmatched || []);
       setTriageResults(stored.triageResults || {});
       setTasks(stored.tasks || []);
+      setIntegrations(stored.integrations || integrations);
       if (stored.date) setDate(new Date(stored.date));
       const seeded = hydrateClaims(stored.claims || initClaims, stored.date || date, stored.rules || defaultRules);
       setClaims(seeded);
@@ -355,8 +370,9 @@ export default function App() {
       unmatched,
       triageResults,
       tasks,
+      integrations,
     });
-  }, [claims, audit, stats, date, rules, demoMode, uploads, needsReview, unmatched, triageResults, tasks]);
+  }, [claims, audit, stats, date, rules, demoMode, uploads, needsReview, unmatched, triageResults, tasks, integrations]);
 
   const metrics = useMemo(() => {
     const totalAmount = claims.reduce((sum, claim) => sum + claim.amount, 0);
@@ -619,6 +635,31 @@ export default function App() {
       detail: 'Asociado manualmente',
       source: 'user',
     });
+  };
+
+  const addIntegration = (e) => {
+    e.preventDefault();
+    const form = new FormData(e.target);
+    const next = {
+      id: `int-${Date.now()}`,
+      name: form.get('name'),
+      host: form.get('host'),
+      user: form.get('user'),
+      path: form.get('path'),
+      schedule: form.get('schedule'),
+      timezone: form.get('timezone'),
+      lastPull: 'Pendiente',
+      lastFile: '-',
+      errors: 0,
+    };
+    setIntegrations((prev) => [next, ...prev]);
+    logAudit({
+      action: 'Usuario configuró integración',
+      claimId: 'INTEGRATION',
+      detail: next.name,
+      source: 'user',
+    });
+    e.target.reset();
   };
 
   const updateStatus = (id, status) => {
@@ -895,10 +936,12 @@ Paciente: ${patientName}
         <nav className="flex-1 p-1 space-y-1">
           {[
             ['dashboard', BarChart3, 'Dashboard'],
+            ['implementation', CheckCircle, 'Implementación'],
+            ['integrations', Users, 'Integraciones'],
             ['upload', Upload, 'Upload Center'],
             ['denials', AlertCircle, 'Denials'],
             ['unmatched', Users, 'Unmatched'],
-            ['review', History, 'Needs Review'],
+            ['review', History, 'Errores'],
             ['payments', DollarSign, 'Pagos'],
             ['audit', History, 'Auditoría'],
             ['how', FileText, 'Cómo funciona'],
@@ -930,19 +973,23 @@ Paciente: ${patientName}
           <span className="font-semibold">
             {view === 'dashboard'
               ? 'Dashboard'
-              : view === 'upload'
-                ? 'Upload Center'
-                : view === 'denials'
-                  ? 'Denials'
-                  : view === 'unmatched'
-                    ? 'Unmatched'
-                    : view === 'review'
-                      ? 'Needs Review'
-                      : view === 'payments'
-                        ? 'Pagos'
-                        : view === 'how'
-                          ? 'Cómo funciona'
-                          : 'Auditoría'}
+              : view === 'implementation'
+                ? 'Implementación'
+                : view === 'integrations'
+                  ? 'Integraciones'
+                  : view === 'upload'
+                    ? 'Upload Center'
+                    : view === 'denials'
+                      ? 'Denials'
+                      : view === 'unmatched'
+                        ? 'Unmatched'
+                        : view === 'review'
+                          ? 'Errores de ingestión'
+                          : view === 'payments'
+                            ? 'Pagos'
+                            : view === 'how'
+                              ? 'Cómo funciona'
+                              : 'Auditoría'}
           </span>
           <div className="flex items-center gap-2">
             <span className="bg-slate-100 px-1.5 py-0.5 rounded flex items-center gap-1">
@@ -985,6 +1032,78 @@ Paciente: ${patientName}
         </header>
 
         <main className="flex-1 overflow-auto p-2">
+          {view === 'implementation' && (
+            <div className="space-y-2">
+              <div className="bg-white rounded p-2 border">
+                <h2 className="font-semibold">Implementación en 3 pasos</h2>
+                <p className="text-slate-600 mt-1">Camino realista para pasar de piloto a producción sin fricción.</p>
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                {[
+                  {
+                    title: 'Paso 1 · Conectar o cargar',
+                    body: 'Conecta SFTP o sube archivos manualmente para iniciar el piloto.',
+                  },
+                  {
+                    title: 'Paso 2 · Subir ejemplo',
+                    body: 'Carga un 277CA/835 de muestra y valida el parseo en Upload Center.',
+                  },
+                  {
+                    title: 'Paso 3 · Activar automático',
+                    body: 'Deja los archivos diarios en la carpeta segura y la cola se actualiza sola.',
+                  },
+                ].map((step) => (
+                  <div key={step.title} className="bg-white rounded p-2 border">
+                    <p className="font-semibold">{step.title}</p>
+                    <p className="text-slate-600 mt-1">{step.body}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {view === 'integrations' && (
+            <div className="space-y-2">
+              <div className="bg-white rounded p-2 border">
+                <h2 className="font-semibold">Integraciones por tenant</h2>
+                <p className="text-slate-600 mt-1">
+                  Configura SFTP y mapeos mínimos. En MVP solo pedimos lo esencial para empezar.
+                </p>
+                <form onSubmit={addIntegration} className="grid grid-cols-3 gap-2 mt-2">
+                  <input name="name" placeholder="Nombre" className="border rounded p-1" required />
+                  <input name="host" placeholder="Host SFTP" className="border rounded p-1" required />
+                  <input name="user" placeholder="Usuario" className="border rounded p-1" required />
+                  <input name="path" placeholder="Ruta" className="border rounded p-1" required />
+                  <input name="schedule" placeholder="Frecuencia" className="border rounded p-1" required />
+                  <input name="timezone" placeholder="Zona horaria" className="border rounded p-1" required />
+                  <button type="submit" className="px-3 py-1 bg-emerald-600 text-white rounded">
+                    Guardar integración
+                  </button>
+                </form>
+              </div>
+              <div className="bg-white rounded p-2 border">
+                <p className="font-semibold">Estado</p>
+                <div className="mt-2 space-y-2">
+                  {integrations.map((int) => (
+                    <div key={int.id} className="p-2 bg-slate-50 rounded flex justify-between">
+                      <div>
+                        <p className="font-medium">{int.name}</p>
+                        <p className="text-slate-500 text-xs">
+                          {int.host} • {int.path} • {int.schedule} • {int.timezone}
+                        </p>
+                      </div>
+                      <div className="text-right text-xs text-slate-500">
+                        <p>Último pull: {int.lastPull}</p>
+                        <p>Último archivo: {int.lastFile}</p>
+                        <p>Errores: {int.errors}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
           {view === 'upload' && (
             <div className="space-y-2">
               <div className="bg-white rounded p-2 border">
@@ -1401,8 +1520,8 @@ Paciente: ${patientName}
           {view === 'review' && (
             <div className="bg-white rounded p-2 border">
               <div className="flex justify-between mb-2">
-                <span className="font-semibold">Needs Review ({needsReview.length})</span>
-                <span className="text-slate-400">Archivos sin parseo</span>
+                <span className="font-semibold">Errores de ingestión ({needsReview.length})</span>
+                <span className="text-slate-400">Revisar archivos inválidos</span>
               </div>
               {needsReview.length ? (
                 <div className="space-y-2">
@@ -1554,6 +1673,24 @@ Paciente: ${patientName}
                 <p className="text-slate-600 mt-1">
                   Se automatiza el envío diario de archivos. El equipo sigue trabajando igual, solo que la cola se actualiza sola.
                 </p>
+                <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-slate-600">
+                  <div className="bg-slate-50 rounded p-2">
+                    <p className="font-semibold">¿De dónde salen los denials?</p>
+                    <p>De los archivos 277CA y 835 que genera el clearinghouse.</p>
+                  </div>
+                  <div className="bg-slate-50 rounded p-2">
+                    <p className="font-semibold">¿Qué debe hacer el cliente?</p>
+                    <p>Conectar SFTP o subir archivos manualmente en Upload Center.</p>
+                  </div>
+                  <div className="bg-slate-50 rounded p-2">
+                    <p className="font-semibold">¿Qué necesitamos?</p>
+                    <p>Credenciales SFTP, ids de pagador y un sample de 277CA/835.</p>
+                  </div>
+                  <div className="bg-slate-50 rounded p-2">
+                    <p className="font-semibold">¿Qué pasa con errores?</p>
+                    <p>Van a Errores de ingestión con motivo claro para revisión.</p>
+                  </div>
+                </div>
               </div>
             </div>
           )}
