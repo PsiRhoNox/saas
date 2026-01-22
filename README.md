@@ -36,6 +36,10 @@ node server/poller.js
 - `GET /api/v1/ai/triage/:denialId`
 - `POST /api/v1/unmatched/:id/resolve`
 
+## Backend NestJS (MVP realista)
+Incluye un backend NestJS con endpoints de ingestión, configuración SFTP y colas de procesamiento.
+Consulta `backend/README.md` para correrlo.
+
 ## Build
 ```bash
 npm run build
