@@ -88,8 +88,8 @@ CREATE TABLE claims (
   substatus VARCHAR(50),
 
   -- Últimos eventos (pointers)
-  last_denial_id UUID,
-  last_payment_id UUID,
+  last_denial_id UUID REFERENCES denials(id) ON DELETE SET NULL,
+  last_payment_id UUID REFERENCES payments(id) ON DELETE SET NULL,
 
   -- Scoring (calculado)
   priority_score INTEGER,
@@ -226,7 +226,23 @@ CREATE INDEX idx_audit_user ON audit_log(user_id, created_at DESC);
 CREATE INDEX idx_audit_tenant_date ON audit_log(tenant_id, created_at DESC);
 ```
 
-### 2.3 Estado del Claim (State Machine)
+**Nota operativa:** la actualización de `last_denial_id` y `last_payment_id` debe estar centralizada en el servicio de ingestión (277CA/835) para evitar inconsistencias.
+
+### 2.3 Versionado de payer_rules (no solapamiento)
+
+Para asegurar una única regla activa por pagador y tenant en cada fecha, se recomienda un constraint por rango:
+
+```sql
+ALTER TABLE payer_rules
+  ADD CONSTRAINT payer_rules_no_overlap
+  EXCLUDE USING gist (
+    tenant_id WITH =,
+    payer_id WITH =,
+    daterange(effective_date, COALESCE(end_date, 'infinity'::date), '[]') WITH &&
+  );
+```
+
+### 2.4 Estado del Claim (State Machine)
 
 ```
 submitted → acknowledged → pending → denied → in_review → appealed
@@ -674,9 +690,34 @@ CREATE POLICY tenant_isolation_audit ON audit_log
 
 **Nota:** En ambientes con connection pooling, el `tenant_id` debe setearse dentro de una transacción por request para evitar leakage.
 
+### 9.1 Tablas relacionadas con RLS
+Todas las tablas referenciadas deben incluir `tenant_id` + policy RLS: `patients`, `payers`, `providers`, `facilities`, `users`, `edi_files`, `templates`, `documents`.
+
+```sql
+ALTER TABLE patients ENABLE ROW LEVEL SECURITY;
+ALTER TABLE payers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE providers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE facilities ENABLE ROW LEVEL SECURITY;
+ALTER TABLE users ENABLE ROW LEVEL SECURITY;
+ALTER TABLE edi_files ENABLE ROW LEVEL SECURITY;
+ALTER TABLE templates ENABLE ROW LEVEL SECURITY;
+ALTER TABLE documents ENABLE ROW LEVEL SECURITY;
+```
+
+---  
+
+## 10. Índices recomendados (performance)
+
+```sql
+CREATE INDEX idx_claims_tenant_status ON claims(tenant_id, status);
+CREATE INDEX idx_denials_tenant_resolution ON denials(tenant_id, resolution_status);
+CREATE INDEX idx_denials_due_date ON denials(tenant_id, due_date);
+CREATE INDEX idx_payments_tenant_date ON payments(tenant_id, payment_date);
+```
+
 ---
 
-## 10. Plan de Despliegue por Fases
+## 11. Plan de Despliegue por Fases
 
 ### Fase 1: MVP (Semanas 1-6)
 **Objetivo:** Demo vendible con 1 clearinghouse y 2 pagadores.
@@ -722,7 +763,7 @@ CREATE POLICY tenant_isolation_audit ON audit_log
 
 ---
 
-## 11. Apéndice: Notas de Handoff
+## 12. Apéndice: Notas de Handoff
 - Mantener `claims.status` como fuente de verdad del workflow.
 - `denials` es histórico por evento; no duplicar estado del claim allí.
 - Las reglas por pagador deben versionarse para auditoría.

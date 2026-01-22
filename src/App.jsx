@@ -18,8 +18,9 @@ import {
 } from 'lucide-react';
 
 const STORAGE_KEY = 'denialsZeroDesk';
-const STORAGE_VERSION = 1;
+const STORAGE_VERSION = 2;
 const SCORING_VERSION = 'v1.2';
+const APPEAL_MODEL_VERSION = 'demo-fallback-v1';
 
 const defaultRules = {
   payerRules: {
@@ -182,6 +183,18 @@ const hydrateClaims = (claims, date, rules) =>
     ...score(c, date, rules),
   }));
 
+const maskName = (name) => {
+  if (!name) return '';
+  const [first, ...rest] = name.split(' ');
+  const maskedRest = rest.map((part) => (part ? `${part[0]}***` : '')).join(' ');
+  return `${first[0]}***${maskedRest ? ` ${maskedRest}` : ''}`;
+};
+
+const maskClaimPhi = (claim) => ({
+  ...claim,
+  patient: maskName(claim.patient),
+});
+
 const getStoredState = () => {
   if (typeof window === 'undefined') return null;
   try {
@@ -214,6 +227,11 @@ const buildAuditEntry = ({
   after,
   scoring,
   simDate,
+  aiDecision,
+  modelVersion,
+  requestId,
+  latencyMs,
+  result,
 }) => {
   const timestamp = new Date();
   return {
@@ -231,7 +249,11 @@ const buildAuditEntry = ({
     changedFields: before && after ? Object.keys(after).filter((k) => before[k] !== after[k]) : [],
     scoringInputs: scoring?.inputs || null,
     scoringVersion: scoring?.scoringVersion || null,
-    aiDecision: source === 'system',
+    aiDecision: aiDecision ?? source === 'system',
+    modelVersion: modelVersion || null,
+    requestId: requestId || null,
+    latencyMs: latencyMs ?? null,
+    result: result || null,
   };
 };
 
@@ -254,12 +276,14 @@ export default function App() {
   const [audit, setAudit] = useState([]);
   const [stats, setStats] = useState({ proc: 0, app: 0 });
   const [rules, setRules] = useState(defaultRules);
+  const [demoMode, setDemoMode] = useState(true);
 
   useEffect(() => {
     const stored = getStoredState();
     if (stored) {
       setRules(stored.rules || defaultRules);
       setStats(stored.stats || { proc: 0, app: 0 });
+      setDemoMode(stored.demoMode ?? true);
       if (stored.date) setDate(new Date(stored.date));
       const seeded = hydrateClaims(stored.claims || initClaims, stored.date || date, stored.rules || defaultRules);
       setClaims(seeded);
@@ -297,19 +321,21 @@ export default function App() {
       const refreshed = rescored.find((c) => c.id === sel.id);
       if (refreshed) setSel(refreshed);
     }
-  }, [date]);
+  }, [date, rules]);
 
   useEffect(() => {
     if (!claims.length) return;
+    const claimsForStorage = demoMode ? claims.map(maskClaimPhi) : claims;
     persistState({
       version: STORAGE_VERSION,
-      claims,
+      claims: claimsForStorage,
       audit,
       stats,
       date: date.toISOString(),
       rules,
+      demoMode,
     });
-  }, [claims, audit, stats, date, rules]);
+  }, [claims, audit, stats, date, rules, demoMode]);
 
   const metrics = useMemo(() => {
     const totalAmount = claims.reduce((sum, claim) => sum + claim.amount, 0);
@@ -324,7 +350,7 @@ export default function App() {
     };
   }, [claims]);
 
-  const logAudit = ({ action, claimId, detail, source, before, after, scoring }) => {
+  const logAudit = ({ action, claimId, detail, source, before, after, scoring, aiDecision, modelVersion, requestId, latencyMs, result }) => {
     const entry = buildAuditEntry({
       action,
       claimId,
@@ -334,6 +360,11 @@ export default function App() {
       after,
       scoring,
       simDate: date.toLocaleDateString(),
+      aiDecision,
+      modelVersion,
+      requestId,
+      latencyMs,
+      result,
     });
     setAudit((prev) => [entry, ...prev]);
   };
@@ -381,11 +412,13 @@ export default function App() {
 
   const generateAppeal = async (claim) => {
     const apiUrl = import.meta.env.VITE_APPEAL_API_URL;
-    const apiKey = import.meta.env.VITE_APPEAL_API_KEY;
-    if (!apiUrl || !apiKey) {
-      return `APELACIÓN ${claim.id}
+    const publicToken = import.meta.env.VITE_APPEAL_PUBLIC_TOKEN;
+    const startedAt = performance.now();
+    const patientName = demoMode ? maskName(claim.patient) : claim.patient;
+    if (!apiUrl || !publicToken) {
+      const fallbackText = `APELACIÓN ${claim.id}
 Para: ${claim.payer}
-Paciente: ${claim.patient}
+Paciente: ${patientName}
 Proveedor: ${claim.provider}
 CPT: ${claim.cpt} | Dx: ${claim.dx}
 Monto: $${claim.amount}
@@ -393,19 +426,31 @@ Denial: ${claim.code} - ${claim.reason}
 Acción: ${claim.action}
 Prob: ${claim.prob}%
 
-[Modo demo: agrega una API key para generar texto real.]`;
+[Modo demo: agrega un token público para generar texto real.]`;
+      logAudit({
+        action: 'AI apelación',
+        claimId: claim.id,
+        detail: 'Fallback local',
+        source: 'system',
+        aiDecision: true,
+        modelVersion: APPEAL_MODEL_VERSION,
+        requestId: 'local-fallback',
+        latencyMs: Math.round(performance.now() - startedAt),
+        result: 'fallback',
+      });
+      return { text: fallbackText, meta: { ok: false, modelVersion: APPEAL_MODEL_VERSION, requestId: 'local-fallback' } };
     }
 
     const response = await fetch(apiUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`,
+        Authorization: `Bearer ${publicToken}`,
       },
       body: JSON.stringify({
         claimId: claim.id,
         payer: claim.payer,
-        patient: claim.patient,
+        patient: patientName,
         provider: claim.provider,
         cpt: claim.cpt,
         dx: claim.dx,
@@ -417,20 +462,45 @@ Prob: ${claim.prob}%
     });
 
     if (!response.ok) {
-      return `APELACIÓN ${claim.id}
+      const fallbackText = `APELACIÓN ${claim.id}
 Para: ${claim.payer}
-Paciente: ${claim.patient}
+Paciente: ${patientName}
 
 [Fallback: servicio no disponible (${response.status}).]`;
+      logAudit({
+        action: 'AI apelación',
+        claimId: claim.id,
+        detail: `Error ${response.status}`,
+        source: 'system',
+        aiDecision: true,
+        modelVersion: APPEAL_MODEL_VERSION,
+        requestId: `error-${response.status}`,
+        latencyMs: Math.round(performance.now() - startedAt),
+        result: 'error',
+      });
+      return { text: fallbackText, meta: { ok: false, modelVersion: APPEAL_MODEL_VERSION, requestId: `error-${response.status}` } };
     }
 
     const data = await response.json();
-    return data.text || data.appeal || data.message || 'Respuesta vacía del modelo.';
+    const modelVersion = data.modelVersion || data.model || APPEAL_MODEL_VERSION;
+    const requestId = data.requestId || data.id || `req-${Date.now()}`;
+    logAudit({
+      action: 'AI apelación',
+      claimId: claim.id,
+      detail: 'Generación OK',
+      source: 'system',
+      aiDecision: true,
+      modelVersion,
+      requestId,
+      latencyMs: Math.round(performance.now() - startedAt),
+      result: 'ok',
+    });
+    return { text: data.text || data.appeal || data.message || 'Respuesta vacía del modelo.', meta: { ok: true, modelVersion, requestId } };
   };
 
   const openAppealModal = async (claim) => {
-    const appealText = await generateAppeal(claim);
-    setAppeal(appealText);
+    const appealResult = await generateAppeal(claim);
+    setAppeal(appealResult.text);
     setModal(true);
   };
 
@@ -533,6 +603,18 @@ Paciente: ${claim.patient}
                 <RefreshCw className="w-3 h-3" />
               </button>
             </span>
+            <div className="flex items-center gap-1 text-[10px] text-slate-500">
+              <span>Demo PHI</span>
+              <button
+                onClick={() => setDemoMode((prev) => !prev)}
+                className={`px-1 rounded border ${demoMode ? 'bg-emerald-50 text-emerald-700' : 'bg-white text-slate-500'}`}
+              >
+                {demoMode ? 'ON' : 'OFF'}
+              </button>
+              <button onClick={resetStorage} className="px-1 rounded border hover:bg-slate-100">
+                Reset
+              </button>
+            </div>
             <Bell className="w-3 h-3 text-slate-400" />
           </div>
         </header>
@@ -579,7 +661,7 @@ Paciente: ${claim.patient}
                             {c.prio}
                           </div>
                           <div>
-                            <p className="font-medium">{c.patient}</p>
+                          <p className="font-medium">{displayName(c)}</p>
                             <p className="text-slate-500">{c.id}</p>
                           </div>
                         </div>
@@ -643,7 +725,7 @@ Paciente: ${claim.patient}
                       exportCsv(
                         filtered.map((c) => ({
                           id: c.id,
-                          patient: c.patient,
+                          patient: displayName(c),
                           payer: c.payer,
                           amount: c.amount,
                           status: c.status,
@@ -668,14 +750,14 @@ Paciente: ${claim.patient}
                       }`}
                     >
                       <div className="flex justify-between">
-                        <div className="flex items-center gap-1">
-                          <div className={`w-5 h-5 rounded-full flex items-center justify-center font-bold ${priorityClass(c.prio)}`}>
-                            {c.prio}
-                          </div>
-                          <div>
-                            <p className="font-medium">{c.patient}</p>
-                            <p className="text-slate-500">{c.id}</p>
-                          </div>
+                      <div className="flex items-center gap-1">
+                        <div className={`w-5 h-5 rounded-full flex items-center justify-center font-bold ${priorityClass(c.prio)}`}>
+                          {c.prio}
+                        </div>
+                        <div>
+                          <p className="font-medium">{displayName(c)}</p>
+                          <p className="text-slate-500">{c.id}</p>
+                        </div>
                         </div>
                         <div className="text-right">
                           <p className="font-semibold">${c.amount.toLocaleString()}</p>
@@ -711,7 +793,7 @@ Paciente: ${claim.patient}
                     </div>
                     <div className="grid grid-cols-2 gap-1">
                       {[
-                        ['Paciente', sel.patient],
+                        ['Paciente', displayName(sel)],
                         ['Pagador', sel.payer],
                         ['Proveedor', sel.provider],
                         ['Facility', sel.facility],
@@ -810,7 +892,7 @@ Paciente: ${claim.patient}
                       <div key={c.id} className="flex justify-between p-1 bg-slate-50 rounded mt-1">
                         <div>
                           <p className="font-medium">{c.id}</p>
-                          <p className="text-slate-500">{c.patient}</p>
+                          <p className="text-slate-500">{displayName(c)}</p>
                         </div>
                         <div className="text-right">
                           <p className="font-semibold">${c.amount.toLocaleString()}</p>
@@ -841,6 +923,10 @@ Paciente: ${claim.patient}
                         source: a.source,
                         changed: (a.changedFields || []).join('|'),
                         scoringVersion: a.scoringVersion || '',
+                        modelVersion: a.modelVersion || '',
+                        requestId: a.requestId || '',
+                        latencyMs: a.latencyMs ?? '',
+                        result: a.result || '',
                       })),
                       'audit.csv'
                     )
@@ -868,6 +954,12 @@ Paciente: ${claim.patient}
                     <p className="text-slate-400 text-xs">
                       Scoring {entry.scoringVersion}: días {entry.scoringInputs.days}, amt {entry.scoringInputs.amt}, age{' '}
                       {entry.scoringInputs.age}
+                    </p>
+                  ) : null}
+                  {entry.modelVersion || entry.requestId ? (
+                    <p className="text-slate-400 text-xs">
+                      AI {entry.modelVersion || 'n/a'} • {entry.requestId || 'n/a'} • {entry.latencyMs ?? '--'}ms •{' '}
+                      {entry.result || 'n/a'}
                     </p>
                   ) : null}
                 </div>
@@ -916,3 +1008,11 @@ Paciente: ${claim.patient}
     </div>
   );
 }
+  const displayName = (claim) => (demoMode ? maskName(claim.patient) : claim.patient);
+
+  const resetStorage = () => {
+    if (typeof window !== 'undefined') {
+      window.localStorage.removeItem(STORAGE_KEY);
+      window.location.reload();
+    }
+  };
