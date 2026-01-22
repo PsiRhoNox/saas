@@ -1229,7 +1229,7 @@ export default function App() {
     });
   };
 
-  const applyAppeal = (claim, appealEntry) => {
+  const applyAppeal = (claim, appealEntry, source = 'user') => {
     const before = { status: claim.status, appeals: claim.appeals.length, prio: claim.prio, prob: claim.prob };
     const nextClaim = {
       ...claim,
@@ -1241,10 +1241,10 @@ export default function App() {
     setSel(rescored);
     setStats((prev) => ({ proc: prev.proc + 1, app: prev.app + 1 }));
     logAudit({
-      action: 'Usuario generó apelación demo',
+      action: source === 'system' ? 'Sistema generó apelación demo' : 'Usuario generó apelación demo',
       claimId: claim.id,
       detail: appealEntry.id,
-      source: 'user',
+      source,
       before,
       after: { status: rescored.status, appeals: rescored.appeals.length, prio: rescored.prio, prob: rescored.prob },
       scoring: rescored,
@@ -1402,28 +1402,28 @@ Paciente: ${patientName}
   const tourSteps = [
     {
       id: 'nav-denials',
-      title: '1. Cola priorizada',
-      body: 'Aquí aparece el backlog ordenado por prioridad y probabilidad de recuperación.',
+      title: '1. Denials Inbox',
+      body: 'Aquí aparece la cola priorizada con probabilidad y monto.',
     },
     {
       id: 'denial-detail',
       title: '2. Detalle del denial',
-      body: 'Al abrir un denial ves el monto, la razón y la acción sugerida.',
+      body: 'Abre un denial para ver motivo, monto y pagador.',
+    },
+    {
+      id: 'tour-status',
+      title: '3. Acción sugerida + estado',
+      body: 'Aplica una acción y marca el denial en proceso.',
     },
     {
       id: 'tour-appeal',
-      title: '3. Borrador de apelación',
-      body: 'Genera un borrador demo con un clic y deja rastro en auditoría.',
+      title: '4. Generar apelación demo',
+      body: 'Crea un borrador y guarda la trazabilidad.',
     },
     {
       id: 'nav-audit',
-      title: '4. Auditoría',
-      body: 'Cada cambio queda registrado con usuario, hora y explicación.',
-    },
-    {
-      id: 'nav-tutorial',
-      title: '5. Cómo llegan los denials',
-      body: 'Explica el origen real de los archivos y el orden recomendado.',
+      title: '5. Audit log',
+      body: 'Todo queda registrado con usuario, hora y detalle.',
     },
   ];
 
@@ -1439,21 +1439,33 @@ Paciente: ${patientName}
     logAudit({
       action: 'Recorrido rápido iniciado',
       claimId: top.id,
-      detail: 'Mostrando flujo completo',
+      detail: 'Seleccionamos el denial más prioritario',
       source: 'system',
     });
     updateStatus(top.id, 'in_progress');
+    logAudit({
+      action: 'Sistema cambió estado a En proceso',
+      claimId: top.id,
+      detail: 'Se inicia trabajo de recuperación',
+      source: 'system',
+    });
     const appealEntry = {
       id: `APL-${Date.now().toString().slice(-4)}`,
       createdAt: new Date().toISOString(),
       status: 'submitted',
       summary: 'Apelación demo generada',
     };
-    applyAppeal(top, appealEntry);
+    applyAppeal(top, appealEntry, 'system');
+    logAudit({
+      action: 'Sistema sugirió acción prioritaria',
+      claimId: top.id,
+      detail: 'Reunir documentos y reenviar al pagador',
+      source: 'system',
+    });
     logAudit({
       action: 'Recorrido rápido completado',
       claimId: top.id,
-      detail: 'Estado y apelación actualizados',
+      detail: 'Estado, apelación y auditoría listos',
       source: 'system',
     });
     setView('audit');
@@ -1492,6 +1504,7 @@ Paciente: ${patientName}
           {[
             ['dashboard', BarChart3, 'Dashboard'],
             ['tutorial', FileText, 'Cómo llegan los denials'],
+            ['how', FileText, 'Cómo funciona'],
             ['intake', Upload, 'Data Intake'],
             ['ingestions', History, 'Historial de ingestión'],
             ['denials', AlertCircle, 'Denials Inbox'],
@@ -1529,21 +1542,23 @@ Paciente: ${patientName}
               ? 'Dashboard'
               : view === 'tutorial'
                 ? 'Cómo llegan los denials'
-                : view === 'intake'
-                  ? 'Data Intake'
-                  : view === 'ingestions'
-                    ? 'Historial de ingestión'
-                    : view === 'integrations'
-                      ? 'SFTP (visual)'
-                      : view === 'denials'
-                        ? 'Denials Inbox'
-                        : view === 'unmatched'
-                          ? 'Unmatched'
-                          : view === 'payments'
-                            ? 'Pagos'
-                            : view === 'audit'
-                              ? 'Auditoría'
-                              : 'Detalle'}
+                : view === 'how'
+                  ? 'Cómo funciona'
+                  : view === 'intake'
+                    ? 'Data Intake'
+                    : view === 'ingestions'
+                      ? 'Historial de ingestión'
+                      : view === 'integrations'
+                        ? 'SFTP (visual)'
+                        : view === 'denials'
+                          ? 'Denials Inbox'
+                          : view === 'unmatched'
+                            ? 'Unmatched'
+                            : view === 'payments'
+                              ? 'Pagos'
+                              : view === 'audit'
+                                ? 'Auditoría'
+                                : 'Detalle'}
           </span>
           <div className="flex items-center gap-2">
             <span className="bg-slate-100 px-1.5 py-0.5 rounded flex items-center gap-1">
@@ -1570,7 +1585,7 @@ Paciente: ${patientName}
               Tour
             </button>
             <div className="flex items-center gap-1 text-[10px] text-slate-500">
-              <span>Demo PHI</span>
+              <span>Demo PHI (solo visual)</span>
               <button
                 onClick={() => setDemoMode((prev) => !prev)}
                 className={`px-1 rounded border ${demoMode ? 'bg-emerald-50 text-emerald-700' : 'bg-white text-slate-500'}`}
@@ -1632,6 +1647,56 @@ Paciente: ${patientName}
                     </button>
                   )}
                 </div>
+              </div>
+            </div>
+          )}
+
+          {view === 'how' && (
+            <div className="space-y-2">
+              <div className="bg-white rounded p-2 border">
+                <h2 className="font-semibold">Cómo funciona en el mundo real</h2>
+                <p className="text-slate-600 mt-1">
+                  Explicación simple de cómo llegan los denials y qué hace el cliente para activar el flujo.
+                </p>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                {[
+                  {
+                    title: '¿De dónde salen los denials?',
+                    body: 'Del 277CA (estatus/rechazos) y del 835 (ajustes CAS no pagados).',
+                  },
+                  {
+                    title: '¿Qué hace el cliente para que lleguen aquí?',
+                    body: 'Conecta el flujo de archivos: primero en piloto sube manualmente, luego en producción usa SFTP seguro.',
+                  },
+                  {
+                    title: '¿Qué sube si está en piloto?',
+                    body: 'Archivos 277CA y 835 (y CSV si desea validar antes). El orden recomendado es 277CA → 835.',
+                  },
+                  {
+                    title: '¿Qué cambia al pasar a producción?',
+                    body: 'Configuramos SFTP/carpeta segura. El sistema procesa automáticamente igual que la carga manual.',
+                  },
+                  {
+                    title: '¿Qué pasa cuando hay mismatch?',
+                    body: 'Si no hay match, se crea como needs review. El equipo revisa y confirma el match.',
+                  },
+                  {
+                    title: '¿Dónde veo el resultado?',
+                    body: 'Cada archivo deja su resultado y los denials aparecen en Denials Inbox con prioridad.',
+                  },
+                ].map((card) => (
+                  <div key={card.title} className="bg-white rounded p-2 border">
+                    <p className="font-semibold">{card.title}</p>
+                    <p className="text-slate-600 mt-1">{card.body}</p>
+                  </div>
+                ))}
+              </div>
+              <div className="bg-white rounded p-2 border text-xs text-slate-600">
+                <p>
+                  <span className="font-semibold">Resumen:</span> No enviamos 837. Consumimos 277CA y 835 de forma confiable para
+                  poblar la Denials Inbox.
+                </p>
               </div>
             </div>
           )}
@@ -2095,6 +2160,7 @@ Paciente: ${patientName}
                         Apelación
                       </button>
                       <button
+                        id="tour-status"
                         onClick={() => updateStatus(sel.id, 'in_progress')}
                         className="flex-1 bg-blue-600 text-white py-1 rounded hover:bg-blue-700 flex items-center justify-center gap-1"
                       >
