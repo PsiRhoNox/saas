@@ -410,7 +410,7 @@ const PREVENTION_STATUSES = ['open', 'in_progress', 'shipped'];
 const PREVENTION_OWNER_ROLES = ['coding', 'front_desk', 'auth_team', 'clinical'];
 
 export default function App() {
-  const [view, setView] = useState('demo');
+  const [view, setView] = useState('denials');
   const [sel, setSel] = useState(null);
   const [side, setSide] = useState(true);
   const [search, setSearch] = useState('');
@@ -425,6 +425,8 @@ export default function App() {
   const [demoMode, setDemoMode] = useState(true);
   const [showTour, setShowTour] = useState(false);
   const [tourStep, setTourStep] = useState(0);
+  const [extrasOpen, setExtrasOpen] = useState(false);
+  const [showExtrasPrompt, setShowExtrasPrompt] = useState(false);
   const [opsRoleFilter, setOpsRoleFilter] = useState('all');
   const [ingestionRuns, setIngestionRuns] = useState([]);
   const [pendingMappings, setPendingMappings] = useState({});
@@ -2243,6 +2245,7 @@ Paciente: ${patientName}
     if (!top) return;
     setView('denials');
     setSel(top);
+    setShowExtrasPrompt(false);
     logAudit({
       action: 'Recorrido rápido iniciado',
       claimId: top.id,
@@ -2285,6 +2288,7 @@ Paciente: ${patientName}
       detail: 'Estado, apelación y auditoría listos',
       source: 'system',
     });
+    setShowExtrasPrompt(true);
     setView('audit');
   };
 
@@ -2344,16 +2348,9 @@ Paciente: ${patientName}
         <nav className="flex-1 p-1 space-y-1">
           {[
             ['denials', AlertCircle, 'Denials Desk'],
-            ['tutorial', FileText, 'Tutorial'],
-            ['how', FileText, 'Cómo funciona'],
             ['intake', Upload, 'Data Intake'],
-            ['ops', BarChart3, 'Ops Dashboard'],
-            ['ops_queue', Users, 'Ops Queue'],
-            ['dashboard', BarChart3, 'Dashboard'],
-            ['unmatched', Users, 'Unmatched'],
+            ['how', FileText, 'Cómo funciona'],
             ['audit', History, 'Auditoría'],
-            ['demo', FileText, 'Guion de demo'],
-            ['addons', BarChart3, 'Add-ons'],
           ].map(([id, Icon, label]) => (
             <button
               key={id}
@@ -2371,6 +2368,52 @@ Paciente: ${patientName}
               {side && label}
             </button>
           ))}
+          <button
+            onClick={() => setExtrasOpen((prev) => !prev)}
+            className="w-full flex items-center justify-between px-2 py-1 rounded text-slate-400 hover:bg-slate-800"
+          >
+            <span className="flex items-center gap-1">
+              <BarChart3 className="w-3 h-3" />
+              {side && 'Extras'}
+            </span>
+            {side && <span className="text-[10px]">{extrasOpen ? 'Ocultar' : 'Mostrar'}</span>}
+          </button>
+          {extrasOpen
+            ? [
+                ['ops', BarChart3, 'Operaciones (opcional)'],
+                ['ops_queue', Users, 'Ops Queue (opcional)'],
+                ['dashboard', BarChart3, 'Dashboard (opcional)'],
+                ['playbooks', FileText, 'Playbooks (opcional)'],
+                ['prevention', AlertCircle, 'Prevención (opcional)'],
+                ['program', BarChart3, 'Programa (opcional)'],
+                ['underpayments', BarChart3, 'Underpayments (opcional)'],
+                ['insights', BarChart3, 'Insights (opcional)'],
+                ['contract', FileText, 'Contract Lite (opcional)'],
+                ['unmatched', Users, 'Unmatched (opcional)'],
+                ['ingestions', History, 'Historial de ingestión'],
+                ['integrations', Users, 'SFTP (visual)'],
+                ['payments', BarChart3, 'Pagos (opcional)'],
+                ['tutorial', FileText, 'Tutorial (opcional)'],
+                ['demo', FileText, 'Guion de demo (opcional)'],
+                ['addons', BarChart3, 'Add-ons (opcional)'],
+              ].map(([id, Icon, label]) => (
+                <button
+                  key={id}
+                  id={`nav-${id}`}
+                  onClick={() => {
+                    setView(id);
+                    setSel(null);
+                    setSelectedUnderpaymentId(null);
+                  }}
+                  className={`w-full flex items-center gap-1 px-2 py-1 rounded ${
+                    view === id ? 'bg-emerald-600' : 'text-slate-300 hover:bg-slate-800'
+                  }`}
+                >
+                  <Icon className="w-3 h-3" />
+                  {side && label}
+                </button>
+              ))
+            : null}
         </nav>
         <div className="p-2 border-t border-slate-700 flex items-center gap-1">
           <div className="w-5 h-5 rounded-full bg-emerald-600 flex items-center justify-center font-bold">A</div>
@@ -2593,6 +2636,7 @@ Paciente: ${patientName}
               <div className="bg-white rounded p-2 border flex items-center justify-between">
                 <div>
                   <h2 className="font-semibold">Ops Dashboard</h2>
+                  <p className="text-xs text-slate-500">Módulo opcional para equipos que operan backlog con tareas.</p>
                   <p className="text-slate-600 mt-1">Vista operacional para AR Recovery y Denials Ops.</p>
                 </div>
                 <button onClick={createDailyPlan} className="px-3 py-1 bg-emerald-600 text-white rounded">
@@ -2644,6 +2688,7 @@ Paciente: ${patientName}
               <div className="bg-white rounded p-2 border flex items-center justify-between">
                 <div>
                   <h2 className="font-semibold">Ops Queue</h2>
+                  <p className="text-xs text-slate-500">Módulo opcional para ejecución operativa diaria.</p>
                   <p className="text-slate-600 mt-1">Tareas asignadas y no asignadas por rol.</p>
                 </div>
                 <button onClick={createDailyPlan} className="px-3 py-1 bg-emerald-600 text-white rounded">
@@ -2726,6 +2771,7 @@ Paciente: ${patientName}
             <div className="space-y-2">
               <div className="bg-white rounded p-2 border">
                 <h2 className="font-semibold">Playbooks operativos y clínicos</h2>
+                <p className="text-xs text-slate-500">Módulo opcional para estandarizar pasos repetibles.</p>
                 <p className="text-slate-600 mt-1">Plantillas por categoría de denial con pasos y checklist.</p>
               </div>
               <div className="bg-white rounded p-2 border">
@@ -2922,6 +2968,7 @@ Paciente: ${patientName}
             <div className="space-y-2">
               <div className="bg-white rounded p-2 border">
                 <h2 className="font-semibold">Prevención</h2>
+                <p className="text-xs text-slate-500">Módulo opcional para evitar recurrencias.</p>
                 <p className="text-slate-600 mt-1">
                   Convertimos patrones de denials en acciones preventivas internas.
                 </p>
@@ -3008,6 +3055,7 @@ Paciente: ${patientName}
               <div className="bg-white rounded p-2 border flex items-center justify-between">
                 <div>
                   <h2 className="font-semibold">Programa</h2>
+                  <p className="text-xs text-slate-500">Módulo opcional para visión ejecutiva.</p>
                   <p className="text-slate-600 mt-1">Resumen ejecutivo del backlog y acciones.</p>
                 </div>
                 <button
@@ -3095,6 +3143,7 @@ Próximos pasos: reforzar playbooks y cerrar tareas abiertas para prevenir recur
             <div className="space-y-2">
               <div className="bg-white rounded p-2 border">
                 <h2 className="font-semibold">Contract Lite</h2>
+                <p className="text-xs text-slate-500">Módulo opcional para reglas estimadas por pagador.</p>
                 <p className="text-slate-600 mt-1">
                   Reglas simples por pagador para estimar el expected paid (no es contrato completo).
                 </p>
@@ -3209,6 +3258,7 @@ Próximos pasos: reforzar playbooks y cerrar tareas abiertas para prevenir recur
             <div className="space-y-2">
               <div className="bg-white rounded p-2 border">
                 <h2 className="font-semibold">Insights</h2>
+                <p className="text-xs text-slate-500">Módulo opcional con agregados rápidos.</p>
                 <p className="text-slate-600 mt-1">Agregados simples de denials y underpayments.</p>
               </div>
               <div className="grid grid-cols-3 gap-2">
@@ -3291,6 +3341,7 @@ Próximos pasos: reforzar playbooks y cerrar tareas abiertas para prevenir recur
             <div className="space-y-2">
               <div className="bg-white rounded p-2 border">
                 <h2 className="font-semibold">Configuración SFTP (visual)</h2>
+                <p className="text-xs text-slate-500">Módulo opcional para planear integraciones futuras.</p>
                 <p className="text-slate-600 mt-1">
                   Solo guardamos la configuración. La conexión real se implementará más adelante.
                 </p>
@@ -3587,6 +3638,36 @@ Próximos pasos: reforzar playbooks y cerrar tareas abiertas para prevenir recur
           {view === 'denials' && (
             <div className="flex h-full gap-2">
               <div className={`${sel ? 'w-1/2' : 'w-full'} bg-white rounded border flex flex-col`}>
+                <div className="p-2 border-b bg-slate-50">
+                  <p className="font-semibold">Empezar aquí</p>
+                  <p className="text-xs text-slate-500">
+                    Piloto rápido: sube archivos, abre un denial prioritario y revisa la auditoría.
+                  </p>
+                  <div className="mt-2 flex flex-wrap gap-2 text-xs">
+                    <button
+                      onClick={() => setView('intake')}
+                      className="px-2 py-0.5 border rounded hover:bg-slate-100"
+                    >
+                      Ir a Data Intake
+                    </button>
+                    <button
+                      onClick={() => {
+                        const top = [...claims].sort((a, b) => b.prio - a.prio)[0];
+                        if (!top) return;
+                        setSel(top);
+                      }}
+                      className="px-2 py-0.5 border rounded hover:bg-slate-100"
+                    >
+                      Abrir primer denial
+                    </button>
+                    <button
+                      onClick={() => setView('audit')}
+                      className="px-2 py-0.5 border rounded hover:bg-slate-100"
+                    >
+                      Ver auditoría
+                    </button>
+                  </div>
+                </div>
                 <div className="p-1.5 border-b flex gap-1">
                   <div className="flex-1 relative">
                     <Search className="absolute left-1 top-1/2 -translate-y-1/2 w-3 h-3 text-slate-400" />
@@ -4012,6 +4093,7 @@ Próximos pasos: reforzar playbooks y cerrar tareas abiertas para prevenir recur
                 <div className="p-1.5 border-b flex items-center justify-between">
                   <div>
                     <span className="font-semibold">Underpayments (add-on)</span>
+                    <p className="text-xs text-slate-500">Análisis opcional basado en 835 con estimaciones.</p>
                     <p className="text-xs text-slate-500">Estimaciones basadas en reglas Contract Lite.</p>
                   </div>
                   <button onClick={() => setView('addons')} className="text-xs text-emerald-600">
@@ -4224,6 +4306,7 @@ Próximos pasos: reforzar playbooks y cerrar tareas abiertas para prevenir recur
               <div className="bg-white rounded p-2 border">
                 <div className="flex justify-between mb-2">
                   <span className="font-semibold">Historial de ingestión ({ingestionRuns.length})</span>
+                  <span className="text-xs text-slate-500">Módulo opcional para trazabilidad de archivos.</span>
                   <span className="text-slate-400">Estado por archivo</span>
                 </div>
                 {ingestionRuns.length ? (
@@ -4288,6 +4371,7 @@ Próximos pasos: reforzar playbooks y cerrar tareas abiertas para prevenir recur
                 ))}
               </div>
               <div className="bg-white rounded p-2 border">
+                <p className="text-xs text-slate-500">Módulo opcional de seguimiento de pagos.</p>
                 <span className="font-semibold">Apelados</span>
                 {claims.filter((c) => c.status === 'appealed').length ? (
                   claims
@@ -4312,7 +4396,45 @@ Próximos pasos: reforzar playbooks y cerrar tareas abiertas para prevenir recur
           )}
 
           {view === 'audit' && (
-            <div className="bg-white rounded p-2 border">
+            <div className="space-y-2">
+              {showExtrasPrompt ? (
+                <div className="bg-amber-50 border border-amber-200 rounded p-2">
+                  <p className="font-semibold text-amber-800">¿Quieres profundizar?</p>
+                  <p className="text-xs text-amber-800">
+                    Extras opcionales que amplían el piloto: plan operativo, underpayments y prevención.
+                  </p>
+                  <div className="mt-2 flex gap-2 text-xs">
+                    <button
+                      onClick={() => {
+                        setExtrasOpen(true);
+                        setView('ops');
+                      }}
+                      className="px-2 py-0.5 border rounded hover:bg-amber-100"
+                    >
+                      Crear plan de hoy
+                    </button>
+                    <button
+                      onClick={() => {
+                        setExtrasOpen(true);
+                        setView('underpayments');
+                      }}
+                      className="px-2 py-0.5 border rounded hover:bg-amber-100"
+                    >
+                      Ver Underpayments
+                    </button>
+                    <button
+                      onClick={() => {
+                        setExtrasOpen(true);
+                        setView('prevention');
+                      }}
+                      className="px-2 py-0.5 border rounded hover:bg-amber-100"
+                    >
+                      Ver Prevención
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+              <div className="bg-white rounded p-2 border">
               <div className="flex justify-between mb-2">
                 <span className="font-semibold">Auditoría ({audit.length})</span>
                 <button
@@ -4371,6 +4493,7 @@ Próximos pasos: reforzar playbooks y cerrar tareas abiertas para prevenir recur
                   ) : null}
                 </div>
               ))}
+              </div>
             </div>
           )}
 
