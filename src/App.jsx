@@ -273,6 +273,16 @@ const parseCsvLine = (line) => {
   return result.map((cell) => cell.trim());
 };
 
+const hashPayload = (payload) => {
+  const json = JSON.stringify(payload);
+  let hash = 0;
+  for (let i = 0; i < json.length; i += 1) {
+    hash = (hash << 5) - hash + json.charCodeAt(i);
+    hash |= 0;
+  }
+  return `h${Math.abs(hash)}`;
+};
+
 
 const getStoredState = () => {
   if (typeof window === 'undefined') return null;
@@ -311,6 +321,7 @@ const buildAuditEntry = ({
   requestId,
   latencyMs,
   result,
+  payloadHash,
 }) => {
   const timestamp = new Date();
   return {
@@ -333,6 +344,7 @@ const buildAuditEntry = ({
     requestId: requestId || null,
     latencyMs: latencyMs ?? null,
     result: result || null,
+    payloadHash: payloadHash || null,
   };
 };
 
@@ -515,7 +527,21 @@ export default function App() {
     },
   ];
 
-  const logAudit = ({ action, claimId, detail, source, before, after, scoring, aiDecision, modelVersion, requestId, latencyMs, result }) => {
+  const logAudit = ({
+    action,
+    claimId,
+    detail,
+    source,
+    before,
+    after,
+    scoring,
+    aiDecision,
+    modelVersion,
+    requestId,
+    latencyMs,
+    result,
+    payloadHash,
+  }) => {
     const entry = buildAuditEntry({
       action,
       claimId,
@@ -530,6 +556,7 @@ export default function App() {
       requestId,
       latencyMs,
       result,
+      payloadHash,
     });
     setAudit((prev) => [entry, ...prev]);
   };
@@ -1229,6 +1256,19 @@ export default function App() {
     const publicToken = import.meta.env.VITE_APPEAL_PUBLIC_TOKEN;
     const startedAt = performance.now();
     const patientName = demoMode ? maskName(claim.patient) : claim.patient;
+    const appealPayload = {
+      claimId: claim.id,
+      payer: claim.payer,
+      patient: patientName,
+      provider: claim.provider,
+      cpt: claim.cpt,
+      dx: claim.dx,
+      amount: claim.amount,
+      denial: { code: claim.code, reason: claim.reason },
+      action: claim.action,
+      probability: claim.prob,
+    };
+    const payloadHash = hashPayload(appealPayload);
     if (!apiUrl || !publicToken) {
       const fallbackText = `APELACIÓN ${claim.id}
 Para: ${claim.payer}
@@ -1244,13 +1284,14 @@ Prob: ${claim.prob}%
       logAudit({
         action: 'Sistema generó borrador de apelación (demo)',
         claimId: claim.id,
-        detail: 'Fallback local',
+        detail: 'Fallback local (sin proxy)',
         source: 'system',
         aiDecision: true,
         modelVersion: APPEAL_MODEL_VERSION,
         requestId: 'local-fallback',
         latencyMs: Math.round(performance.now() - startedAt),
         result: 'fallback',
+        payloadHash,
       });
       return { text: fallbackText, meta: { ok: false, modelVersion: APPEAL_MODEL_VERSION, requestId: 'local-fallback' } };
     }
@@ -1261,18 +1302,7 @@ Prob: ${claim.prob}%
         'Content-Type': 'application/json',
         Authorization: `Bearer ${publicToken}`,
       },
-      body: JSON.stringify({
-        claimId: claim.id,
-        payer: claim.payer,
-        patient: patientName,
-        provider: claim.provider,
-        cpt: claim.cpt,
-        dx: claim.dx,
-        amount: claim.amount,
-        denial: { code: claim.code, reason: claim.reason },
-        action: claim.action,
-        probability: claim.prob,
-      }),
+      body: JSON.stringify(appealPayload),
     });
 
     if (!response.ok) {
@@ -1284,13 +1314,14 @@ Paciente: ${patientName}
       logAudit({
         action: 'Sistema intentó generar apelación',
         claimId: claim.id,
-        detail: `Error ${response.status}`,
+        detail: `Error ${response.status} (token público)`,
         source: 'system',
         aiDecision: true,
         modelVersion: APPEAL_MODEL_VERSION,
         requestId: `error-${response.status}`,
         latencyMs: Math.round(performance.now() - startedAt),
         result: 'error',
+        payloadHash,
       });
       return { text: fallbackText, meta: { ok: false, modelVersion: APPEAL_MODEL_VERSION, requestId: `error-${response.status}` } };
     }
@@ -1301,13 +1332,14 @@ Paciente: ${patientName}
     logAudit({
       action: 'Sistema generó borrador de apelación',
       claimId: claim.id,
-      detail: 'Generación OK',
+      detail: 'Generación OK (token público)',
       source: 'system',
       aiDecision: true,
       modelVersion,
       requestId,
       latencyMs: Math.round(performance.now() - startedAt),
       result: 'ok',
+      payloadHash,
     });
     return { text: data.text || data.appeal || data.message || 'Respuesta vacía del modelo.', meta: { ok: true, modelVersion, requestId } };
   };
@@ -2283,6 +2315,9 @@ Paciente: ${patientName}
                       AI {entry.modelVersion || 'n/a'} • {entry.requestId || 'n/a'} • {entry.latencyMs ?? '--'}ms •{' '}
                       {entry.result || 'n/a'}
                     </p>
+                  ) : null}
+                  {entry.payloadHash ? (
+                    <p className="text-slate-400 text-xs">Payload hash: {entry.payloadHash}</p>
                   ) : null}
                 </div>
               ))}
