@@ -535,6 +535,15 @@ Paciente: ${patientName}
     )
     .sort((a, b) => b.prio - a.prio);
 
+  const displayName = (claim) => (demoMode ? maskName(claim.patient) : claim.patient);
+
+  const resetStorage = () => {
+    if (typeof window !== 'undefined') {
+      window.localStorage.removeItem(STORAGE_KEY);
+      window.location.reload();
+    }
+  };
+
   const priorityClass = (prio) =>
     prio >= 70 ? 'text-red-600 bg-red-50' : prio >= 40 ? 'text-amber-600 bg-amber-50' : 'text-green-600 bg-green-50';
 
@@ -1008,11 +1017,3 @@ Paciente: ${patientName}
     </div>
   );
 }
-  const displayName = (claim) => (demoMode ? maskName(claim.patient) : claim.patient);
-
-  const resetStorage = () => {
-    if (typeof window !== 'undefined') {
-      window.localStorage.removeItem(STORAGE_KEY);
-      window.location.reload();
-    }
-  };
