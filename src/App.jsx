@@ -5,7 +5,6 @@ import {
   Bell,
   CheckCircle,
   Clock,
-  DollarSign,
   Download,
   FileText,
   History,
@@ -17,10 +16,9 @@ import {
   X,
   Zap,
 } from 'lucide-react';
-import JSZip from 'jszip';
 
 const STORAGE_KEY = 'denialsZeroDesk';
-const STORAGE_VERSION = 4;
+const STORAGE_VERSION = 5;
 const SCORING_VERSION = 'v1.2';
 const APPEAL_MODEL_VERSION = 'demo-fallback-v1';
 
@@ -50,7 +48,7 @@ const initClaims = [
     patientControlNumber: 'PAT-1001',
     trackingNumber: 'TRK-1001',
     needsReview: false,
-    patient: 'Maria Garcia',
+    patient: 'Paciente Demo A',
     payer: 'Blue Cross',
     amount: 4250,
     code: 'CO-16',
@@ -58,8 +56,8 @@ const initClaims = [
     status: 'pending',
     cpt: '99214',
     dx: 'E11.9',
-    provider: 'Dr. Smith',
-    facility: 'Main Clinic',
+    provider: 'Clínica Norte',
+    facility: 'Sede Norte',
     submitted: '2024-01-10',
     denied: '2024-01-18',
     appeals: [],
@@ -70,7 +68,7 @@ const initClaims = [
     patientControlNumber: 'PAT-1002',
     trackingNumber: 'TRK-1002',
     needsReview: false,
-    patient: 'John Davis',
+    patient: 'Paciente Demo B',
     payer: 'Aetna',
     amount: 8750,
     code: 'CO-4',
@@ -78,8 +76,8 @@ const initClaims = [
     status: 'pending',
     cpt: '99215',
     dx: 'I10',
-    provider: 'Dr. Johnson',
-    facility: 'East Wing',
+    provider: 'Clínica Este',
+    facility: 'Sede Este',
     submitted: '2024-01-08',
     denied: '2024-01-16',
     appeals: [],
@@ -90,7 +88,7 @@ const initClaims = [
     patientControlNumber: 'PAT-1003',
     trackingNumber: 'TRK-1003',
     needsReview: false,
-    patient: 'Sarah Wilson',
+    patient: 'Paciente Demo C',
     payer: 'United',
     amount: 2100,
     code: 'PR-1',
@@ -98,8 +96,8 @@ const initClaims = [
     status: 'pending',
     cpt: '99213',
     dx: 'J06.9',
-    provider: 'Dr. Lee',
-    facility: 'Main Clinic',
+    provider: 'Clínica Central',
+    facility: 'Sede Central',
     submitted: '2024-01-05',
     denied: '2024-01-12',
     appeals: [],
@@ -110,7 +108,7 @@ const initClaims = [
     patientControlNumber: 'PAT-1004',
     trackingNumber: 'TRK-1004',
     needsReview: false,
-    patient: 'Robert Chen',
+    patient: 'Paciente Demo D',
     payer: 'Cigna',
     amount: 12500,
     code: 'CO-197',
@@ -118,8 +116,8 @@ const initClaims = [
     status: 'in_progress',
     cpt: '43239',
     dx: 'K21.0',
-    provider: 'Dr. Martinez',
-    facility: 'Surgery',
+    provider: 'Clínica Quirúrgica',
+    facility: 'Unidad Quirúrgica',
     submitted: '2024-01-03',
     denied: '2024-01-15',
     appeals: [],
@@ -130,7 +128,7 @@ const initClaims = [
     patientControlNumber: 'PAT-1005',
     trackingNumber: 'TRK-1005',
     needsReview: false,
-    patient: 'Emily Brown',
+    patient: 'Paciente Demo E',
     payer: 'Humana',
     amount: 3200,
     code: 'CO-16',
@@ -138,8 +136,8 @@ const initClaims = [
     status: 'pending',
     cpt: '80053',
     dx: 'R73.09',
-    provider: 'Dr. Smith',
-    facility: 'Lab',
+    provider: 'Clínica Norte',
+    facility: 'Laboratorio',
     submitted: '2024-01-12',
     denied: '2024-01-20',
     appeals: [],
@@ -150,7 +148,7 @@ const initClaims = [
     patientControlNumber: 'PAT-1006',
     trackingNumber: 'TRK-1006',
     needsReview: false,
-    patient: 'Michael Torres',
+    patient: 'Paciente Demo F',
     payer: 'Blue Cross',
     amount: 6800,
     code: 'CO-11',
@@ -158,8 +156,8 @@ const initClaims = [
     status: 'appealed',
     cpt: '47562',
     dx: 'K80.10',
-    provider: 'Dr. Johnson',
-    facility: 'Surgery',
+    provider: 'Clínica Este',
+    facility: 'Unidad Quirúrgica',
     submitted: '2024-01-02',
     denied: '2024-01-10',
     appeals: [
@@ -329,7 +327,7 @@ const buildAuditEntry = ({
     ts: timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     date: timestamp.toLocaleDateString(),
     simDate,
-    user: source === 'system' ? 'Sistema' : 'Ana R.',
+    user: source === 'system' ? 'Sistema' : 'Equipo Demo',
     action,
     claimId,
     detail,
@@ -382,10 +380,10 @@ const OWNER_ROLE_LABELS = {
 };
 
 const OWNER_POOL = {
-  coder: ['Luis C.', 'María R.'],
-  biller: ['Jorge T.', 'Diana S.'],
-  arv_specialist: ['Ana R.', 'Carlos P.'],
-  supervisor: ['Supervisor'],
+  coder: ['Equipo Demo'],
+  biller: ['Equipo Demo'],
+  arv_specialist: ['Equipo Demo'],
+  supervisor: ['Supervisor Demo'],
 };
 
 const TASK_TYPE_OWNER = {
@@ -412,7 +410,7 @@ const PREVENTION_STATUSES = ['open', 'in_progress', 'shipped'];
 const PREVENTION_OWNER_ROLES = ['coding', 'front_desk', 'auth_team', 'clinical'];
 
 export default function App() {
-  const [view, setView] = useState('dashboard');
+  const [view, setView] = useState('demo');
   const [sel, setSel] = useState(null);
   const [side, setSide] = useState(true);
   const [search, setSearch] = useState('');
@@ -432,8 +430,6 @@ export default function App() {
   const [pendingMappings, setPendingMappings] = useState({});
   const [mappingDrafts, setMappingDrafts] = useState({});
   const [activeRunId, setActiveRunId] = useState(null);
-  const [awaitingInboxRedirect, setAwaitingInboxRedirect] = useState(false);
-  const [tutorialStepIndex, setTutorialStepIndex] = useState(0);
   const [ingestionDetail, setIngestionDetail] = useState(null);
   const [needsReview, setNeedsReview] = useState([]);
   const [unmatched, setUnmatched] = useState([]);
@@ -475,7 +471,6 @@ export default function App() {
     expectedPercent: '',
   });
   const [contractError, setContractError] = useState('');
-  const [underpaymentFilter, setUnderpaymentFilter] = useState('all');
   const [selectedUnderpaymentId, setSelectedUnderpaymentId] = useState(null);
   const [integrations, setIntegrations] = useState([
     {
@@ -502,7 +497,6 @@ export default function App() {
       setPendingMappings(stored.pendingMappings || {});
       setMappingDrafts(stored.mappingDrafts || {});
       setActiveRunId(stored.activeRunId || null);
-      setAwaitingInboxRedirect(stored.awaitingInboxRedirect || false);
       setNeedsReview(stored.needsReview || []);
       setUnmatched(stored.unmatched || []);
       setTriageResults(stored.triageResults || {});
@@ -575,7 +569,6 @@ export default function App() {
       pendingMappings,
       mappingDrafts,
       activeRunId,
-      awaitingInboxRedirect,
       needsReview,
       unmatched,
       triageResults,
@@ -599,7 +592,6 @@ export default function App() {
     pendingMappings,
     mappingDrafts,
     activeRunId,
-    awaitingInboxRedirect,
     needsReview,
     unmatched,
     triageResults,
@@ -709,21 +701,6 @@ export default function App() {
       topIssues,
     };
   }, [claims, playbookUsage, playbooks, preventionIssues]);
-
-  const tutorialSteps = [
-    {
-      title: '1. El cliente ya recibe 277CA y 835',
-      body: 'El clearinghouse o pagador envía estos archivos al cliente. Aquí no inventamos integraciones: solo los subes o los lees vía SFTP.',
-    },
-    {
-      title: '2. Orden recomendado',
-      body: 'Primero sube 277CA para conocer el estatus y tracking; luego 835 para ajustes CAS y montos. Ejemplo: 277CA → 835.',
-    },
-    {
-      title: '3. Resultado visible',
-      body: 'La ingestión crea o actualiza claims, genera denials con códigos y deja historial por archivo. Luego revisas la Denials Inbox.',
-    },
-  ];
 
   const logAudit = ({
     action,
@@ -1306,7 +1283,7 @@ export default function App() {
       patientControlNumber: '',
       trackingNumber: '',
       needsReview: true,
-      patient: demoMode ? 'Paciente Nuevo' : 'Paciente Nuevo',
+      patient: 'Paciente Nuevo',
       payer: 'Blue Cross',
       amount: amount || 1200,
       code: 'CO-11',
@@ -1314,8 +1291,8 @@ export default function App() {
       status: 'pending',
       cpt: '99214',
       dx: 'E11.9',
-      provider: 'Dr. Demo',
-      facility: 'Main Clinic',
+      provider: 'Clínica Demo',
+      facility: 'Sede Central',
       submitted: date.toISOString().slice(0, 10),
       denied: date.toISOString().slice(0, 10),
       appeals: [],
@@ -1333,31 +1310,17 @@ export default function App() {
     for (const file of files) {
       if (!file.name) continue;
       if (file.name.toLowerCase().endsWith('.zip')) {
-        try {
-          const zip = await JSZip.loadAsync(file);
-          const entries = Object.values(zip.files).filter((entry) => !entry.dir);
-          for (const entry of entries) {
-            const content = await entry.async('string');
-            expanded.push({
-              id: `${file.name}-${entry.name}-${Date.now()}`,
-              name: entry.name,
-              sourceName: file.name,
-              content,
-            });
-          }
-        } catch (error) {
-          expanded.push({
-            id: `${file.name}-${Date.now()}`,
-            name: file.name,
-            sourceName: null,
-            content: '',
-            zipError: `No se pudo abrir el zip: ${error.message}`,
-          });
-        }
-      } else {
-        const content = await file.text();
-        expanded.push({ id: `${file.name}-${Date.now()}`, name: file.name, sourceName: null, content });
+        expanded.push({
+          id: `${file.name}-${Date.now()}`,
+          name: file.name,
+          sourceName: null,
+          content: '',
+          zipError: 'ZIP no soportado. Sube los archivos por separado.',
+        });
+        continue;
       }
+      const content = await file.text();
+      expanded.push({ id: `${file.name}-${Date.now()}`, name: file.name, sourceName: null, content });
     }
     return expanded;
   };
@@ -1657,10 +1620,6 @@ export default function App() {
           ? 'error'
           : 'completed',
     }));
-    if (awaitingInboxRedirect && totalDenials > 0) {
-      setView('denials');
-      setAwaitingInboxRedirect(false);
-    }
   };
 
   const applyCsvMapping = (fileId, mapping) => {
@@ -1765,6 +1724,67 @@ export default function App() {
     link.href = URL.createObjectURL(blob);
     link.download = type === 'csv' ? `sample-${type}.csv` : `sample-${type}.txt`;
     link.click();
+  };
+
+  const createSampleIngestion = () => {
+    const now = new Date().toISOString();
+    const runId = `ing-${Date.now()}`;
+    const sampleFiles = [
+      {
+        name: 'demo-277ca.txt',
+        content: 'TRN*1*TRK-3001*123456789~REF*1K*PAT-3001~STC*A1:19*20240101*U*CO:16~',
+        sourceName: 'Archivos de ejemplo',
+      },
+      {
+        name: 'demo-835.txt',
+        content: 'CLP*PCN-2001*1*1250*0*1250*12*PAT-2001*11~TRN*1*TRK-2001~CAS*CO*16*1250~',
+        sourceName: 'Archivos de ejemplo',
+      },
+      {
+        name: 'demo-denials.csv',
+        content: 'claim_id,denial_code,denial_reason,amount\nPCN-4001,CO-16,Falta info,500',
+        sourceName: 'Archivos de ejemplo',
+      },
+    ];
+    const fileRecords = sampleFiles.map((file) => ({
+      id: `${file.name}-${Date.now()}`,
+      name: file.name,
+      sourceName: file.sourceName,
+      type: detectEdiType(file.name, file.content),
+      receivedAt: now,
+      status: 'queued',
+      counts: {
+        claims: 0,
+        denials: 0,
+        payments: 0,
+        adjustments: 0,
+        matched: 0,
+        created: 0,
+        needsReview: 0,
+      },
+      errors: [],
+      warnings: [],
+      content: file.content,
+      zipError: null,
+    }));
+    const newRun = {
+      id: runId,
+      createdAt: now,
+      status: 'queued',
+      files: fileRecords,
+    };
+    setIngestionRuns((prev) => [newRun, ...prev]);
+    setActiveRunId(runId);
+    logAudit({
+      action: 'Ingestión creada',
+      claimId: 'INGEST',
+      detail: `Run ${runId} (archivos de ejemplo)`,
+      source: 'system',
+    });
+    setView('intake');
+    setTimeout(() => {
+      processIngestionRun(runId, fileRecords);
+    }, 400);
   };
 
   const resolveUnmatched = (itemId) => {
@@ -2178,36 +2198,6 @@ Paciente: ${patientName}
     [underpaymentItems, rules]
   );
 
-  const queueItems = useMemo(() => {
-    const denialItems = claims.map((claim) => ({
-      type: 'denial',
-      id: `denial-${claim.id}`,
-      claim,
-      prio: claim.prio,
-      prob: claim.prob,
-    }));
-    const underItems = underpaymentScored.map((item) => ({
-      type: 'underpayment',
-      id: `under-${item.id}`,
-      underpayment: item,
-      claim: claims.find((c) => c.id === item.claimId),
-      prio: item.prio,
-      prob: item.prob,
-    }));
-    return [...denialItems, ...underItems].sort((a, b) => b.prio - a.prio);
-  }, [claims, underpaymentScored]);
-
-  const filteredQueue = queueItems.filter((item) => {
-    if (underpaymentFilter !== 'all' && item.type !== underpaymentFilter) return false;
-    if (item.type === 'denial' && filter !== 'all' && item.claim.status !== filter) return false;
-    const targetId = item.type === 'denial' ? item.claim.id : item.underpayment.claimId;
-    const patientName = item.claim?.patient || '';
-    const match =
-      targetId.toLowerCase().includes(search.toLowerCase()) ||
-      patientName.toLowerCase().includes(search.toLowerCase());
-    return match;
-  });
-
   const resetStorage = () => {
     if (typeof window !== 'undefined') {
       window.localStorage.removeItem(STORAGE_KEY);
@@ -2313,6 +2303,27 @@ Paciente: ${patientName}
 
   const activeRun = ingestionRuns.find((run) => run.id === activeRunId) || ingestionRuns[0];
   const selectedUnderpayment = underpaymentScored.find((item) => item.id === selectedUnderpaymentId);
+  const viewTitles = {
+    demo: 'Guion de demo',
+    dashboard: 'Dashboard',
+    ops_queue: 'Ops Queue',
+    denials: 'Denials Inbox',
+    intake: 'Data Intake',
+    unmatched: 'Unmatched',
+    audit: 'Auditoría',
+    addons: 'Add-ons',
+    ops: 'Ops Dashboard',
+    ingestions: 'Historial de ingestión',
+    integrations: 'SFTP (visual)',
+    payments: 'Pagos',
+    playbooks: 'Playbooks',
+    prevention: 'Prevención',
+    program: 'Programa',
+    contract: 'Contract Lite',
+    insights: 'Insights',
+    underpayments: 'Underpayments',
+  };
+  const headerTitle = viewTitles[view] || 'Detalle';
 
   return (
     <div className="h-screen flex bg-slate-100 overflow-hidden text-xs">
@@ -2330,23 +2341,14 @@ Paciente: ${patientName}
         </div>
         <nav className="flex-1 p-1 space-y-1">
           {[
+            ['demo', FileText, 'Guion de demo'],
             ['dashboard', BarChart3, 'Dashboard'],
-            ['tutorial', FileText, 'Cómo llegan los denials'],
-            ['how', FileText, 'Cómo funciona'],
-            ['ops', BarChart3, 'Ops Dashboard'],
             ['ops_queue', Users, 'Ops Queue'],
-            ['playbooks', FileText, 'Playbooks'],
-            ['prevention', AlertCircle, 'Prevención'],
-            ['program', BarChart3, 'Programa'],
-            ['contract', FileText, 'Contract Lite'],
-            ['insights', BarChart3, 'Insights'],
-            ['intake', Upload, 'Data Intake'],
-            ['ingestions', History, 'Historial de ingestión'],
             ['denials', AlertCircle, 'Denials Inbox'],
+            ['intake', Upload, 'Data Intake'],
             ['unmatched', Users, 'Unmatched'],
-            ['integrations', Users, 'SFTP (visual)'],
-            ['payments', DollarSign, 'Pagos'],
             ['audit', History, 'Auditoría'],
+            ['addons', BarChart3, 'Add-ons'],
           ].map(([id, Icon, label]) => (
             <button
               key={id}
@@ -2367,49 +2369,13 @@ Paciente: ${patientName}
         </nav>
         <div className="p-2 border-t border-slate-700 flex items-center gap-1">
           <div className="w-5 h-5 rounded-full bg-emerald-600 flex items-center justify-center font-bold">A</div>
-          {side && 'Ana R.'}
+          {side && 'Equipo Demo'}
         </div>
       </div>
 
       <div className="flex-1 flex flex-col overflow-hidden">
         <header className="h-8 bg-white border-b flex items-center justify-between px-2">
-          <span className="font-semibold">
-            {view === 'dashboard'
-              ? 'Dashboard'
-              : view === 'tutorial'
-                ? 'Cómo llegan los denials'
-                : view === 'how'
-                  ? 'Cómo funciona'
-                : view === 'ops'
-                  ? 'Ops Dashboard'
-                  : view === 'ops_queue'
-                    ? 'Ops Queue'
-                    : view === 'playbooks'
-                      ? 'Playbooks'
-                      : view === 'prevention'
-                        ? 'Prevención'
-                        : view === 'program'
-                          ? 'Programa'
-                          : view === 'contract'
-                            ? 'Contract Lite'
-                            : view === 'insights'
-                              ? 'Insights'
-                  : view === 'intake'
-                    ? 'Data Intake'
-                    : view === 'ingestions'
-                      ? 'Historial de ingestión'
-                      : view === 'integrations'
-                        ? 'SFTP (visual)'
-                        : view === 'denials'
-                          ? 'Denials Inbox'
-                          : view === 'unmatched'
-                            ? 'Unmatched'
-                            : view === 'payments'
-                              ? 'Pagos'
-                              : view === 'audit'
-                                ? 'Auditoría'
-                                : 'Detalle'}
-          </span>
+          <span className="font-semibold">{headerTitle}</span>
           <div className="flex items-center gap-2">
             <span className="bg-slate-100 px-1.5 py-0.5 rounded flex items-center gap-1">
               <Clock className="w-3 h-3" />
@@ -2435,7 +2401,7 @@ Paciente: ${patientName}
               Tour
             </button>
             <div className="flex items-center gap-1 text-[10px] text-slate-500">
-              <span>Demo PHI (solo visual)</span>
+              <span>Enmascarar nombres (demo)</span>
               <button
                 onClick={() => setDemoMode((prev) => !prev)}
                 className={`px-1 rounded border ${demoMode ? 'bg-emerald-50 text-emerald-700' : 'bg-white text-slate-500'}`}
@@ -2451,102 +2417,86 @@ Paciente: ${patientName}
         </header>
 
         <main className="flex-1 overflow-auto p-2">
-          {view === 'tutorial' && (
+          {view === 'demo' && (
             <div className="space-y-2">
-              <div className="bg-white rounded p-2 border">
-                <h2 className="font-semibold">Cómo llegan los denials</h2>
-                <p className="text-slate-600 mt-1">
-                  Tres pasos simples para explicar a un cliente cómo se alimenta la cola sin magia.
-                </p>
-              </div>
-              <div className="bg-white rounded p-3 border">
-                <p className="text-emerald-600 text-xs">Paso {tutorialStepIndex + 1} de 3</p>
-                <h3 className="font-semibold mt-1">{tutorialSteps[tutorialStepIndex].title}</h3>
-                <p className="text-slate-600 mt-1">{tutorialSteps[tutorialStepIndex].body}</p>
-                {tutorialStepIndex === 1 ? (
-                  <div className="mt-2 p-2 bg-slate-50 rounded border text-xs text-slate-600">
-                    <p className="font-semibold text-slate-700">Mini ejemplo</p>
-                    <p>1) Subes 277CA (rechazos/estatus) → 2) Subes 835 (ajustes y pagos).</p>
-                  </div>
-                ) : null}
-                <div className="mt-3 flex justify-between">
-                  <button
-                    onClick={() => setTutorialStepIndex((prev) => Math.max(0, prev - 1))}
-                    className="px-3 py-1 border rounded hover:bg-slate-50"
-                    disabled={tutorialStepIndex === 0}
-                  >
-                    Anterior
+              <div className="bg-white rounded p-2 border flex items-center justify-between">
+                <div>
+                  <h2 className="font-semibold">Guion de demo (5 minutos)</h2>
+                  <p className="text-slate-600 mt-1">
+                    Un solo recorrido: intake → cola → tarea → auditoría. Datos 100% ficticios y almacenados solo en el navegador.
+                  </p>
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={runQuickTour} className="px-3 py-1 bg-emerald-600 text-white rounded">
+                    Recorrido rápido
                   </button>
-                  {tutorialStepIndex < tutorialSteps.length - 1 ? (
-                    <button
-                      onClick={() => setTutorialStepIndex((prev) => Math.min(tutorialSteps.length - 1, prev + 1))}
-                      className="px-3 py-1 bg-emerald-600 text-white rounded"
-                    >
-                      Siguiente
-                    </button>
-                  ) : (
-                    <button
-                      onClick={() => {
-                        setAwaitingInboxRedirect(true);
-                        setTutorialStepIndex(0);
-                        setView('intake');
-                      }}
-                      className="px-3 py-1 bg-emerald-600 text-white rounded"
-                    >
-                      Ir a subir archivos
-                    </button>
-                  )}
+                  <button onClick={createSampleIngestion} className="px-3 py-1 border rounded hover:bg-slate-50">
+                    Subir archivos de ejemplo
+                  </button>
                 </div>
               </div>
-            </div>
-          )}
-
-          {view === 'how' && (
-            <div className="space-y-2">
-              <div className="bg-white rounded p-2 border">
-                <h2 className="font-semibold">Cómo funciona en el mundo real</h2>
-                <p className="text-slate-600 mt-1">
-                  Explicación simple de cómo llegan los denials y qué hace el cliente para activar el flujo.
-                </p>
-              </div>
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-3 gap-2">
                 {[
                   {
-                    title: '¿De dónde salen los denials?',
-                    body: 'Del 277CA (estatus/rechazos) y del 835 (ajustes CAS no pagados).',
+                    title: '1. De dónde salen los denials',
+                    body: 'El cliente ya recibe 277CA (estatus/rechazos) y 835 (pagos/ajustes). Nosotros convertimos eso en trabajo.',
+                    cta: 'Ver Intake',
+                    target: 'intake',
                   },
                   {
-                    title: '¿Qué hace el cliente para que lleguen aquí?',
-                    body: 'Conecta el flujo de archivos: primero en piloto sube manualmente, luego en producción usa SFTP seguro.',
+                    title: '2. Qué hace el cliente para empezar',
+                    body: 'Piloto: sube archivos manualmente. Producción: conecta carpeta SFTP segura.',
+                    cta: 'Ver SFTP (visual)',
+                    target: 'integrations',
                   },
                   {
-                    title: '¿Qué sube si está en piloto?',
-                    body: 'Archivos 277CA y 835 (y CSV si desea validar antes). El orden recomendado es 277CA → 835.',
-                  },
-                  {
-                    title: '¿Qué cambia al pasar a producción?',
-                    body: 'Configuramos SFTP/carpeta segura. El sistema procesa automáticamente igual que la carga manual.',
-                  },
-                  {
-                    title: '¿Qué pasa cuando hay mismatch?',
-                    body: 'Match MVP: usamos patient control number como ID principal. Si no hay match, se crea como needs review.',
-                  },
-                  {
-                    title: '¿Dónde veo el resultado?',
-                    body: 'Cada archivo deja su resultado y los denials aparecen en Denials Inbox con prioridad.',
+                    title: '3. Qué pasa si no hay match',
+                    body: 'Se crea una cola Unmatched para resolución manual con auditoría.',
+                    cta: 'Ver Unmatched',
+                    target: 'unmatched',
                   },
                 ].map((card) => (
                   <div key={card.title} className="bg-white rounded p-2 border">
                     <p className="font-semibold">{card.title}</p>
                     <p className="text-slate-600 mt-1">{card.body}</p>
+                    <button
+                      onClick={() => setView(card.target)}
+                      className="mt-2 px-2 py-0.5 border rounded text-xs hover:bg-slate-50"
+                    >
+                      {card.cta}
+                    </button>
                   </div>
                 ))}
               </div>
-              <div className="bg-white rounded p-2 border text-xs text-slate-600">
-                <p>
-                  <span className="font-semibold">Resumen:</span> No enviamos 837. Consumimos 277CA y 835 de forma confiable para
-                  poblar la Denials Inbox.
-                </p>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="bg-white rounded p-2 border">
+                  <p className="font-semibold">Cómo se ve el día operativo</p>
+                  <p className="text-slate-600 mt-1">
+                    El sistema prioriza la cola, crea el plan del día y deja todas las acciones en auditoría.
+                  </p>
+                  <div className="mt-2 flex gap-2">
+                    <button onClick={() => setView('denials')} className="px-2 py-0.5 border rounded text-xs hover:bg-slate-50">
+                      Ver Denials Inbox
+                    </button>
+                    <button onClick={() => setView('ops_queue')} className="px-2 py-0.5 border rounded text-xs hover:bg-slate-50">
+                      Ver Ops Queue
+                    </button>
+                  </div>
+                </div>
+                <div className="bg-white rounded p-2 border">
+                  <p className="font-semibold">Qué ve un manager</p>
+                  <p className="text-slate-600 mt-1">
+                    Auditoría en lenguaje humano: “Sistema creó plan”, “Usuario completó tarea”, “Caso avanzó a apelación”.
+                  </p>
+                  <div className="mt-2 flex gap-2">
+                    <button onClick={() => setView('audit')} className="px-2 py-0.5 border rounded text-xs hover:bg-slate-50">
+                      Ver auditoría
+                    </button>
+                    <button onClick={() => setView('dashboard')} className="px-2 py-0.5 border rounded text-xs hover:bg-slate-50">
+                      Ver dashboard
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
           )}
@@ -3305,7 +3255,7 @@ Próximos pasos: reforzar playbooks y cerrar tareas abiertas para prevenir recur
               >
                 <h2 className="font-semibold">Data Intake</h2>
                 <p className="text-slate-600 mt-1">
-                  Sube 835, 277CA, CSV o un ZIP con varios archivos. Detectamos el tipo y procesamos en background.
+                  Sube 835, 277CA o CSV. Detectamos el tipo y procesamos en background. ZIP no soportado en el demo.
                 </p>
                 <div className="mt-2 flex flex-wrap items-center gap-2">
                   <label className="px-3 py-1 border rounded cursor-pointer bg-white hover:bg-slate-50">
@@ -3322,6 +3272,9 @@ Próximos pasos: reforzar playbooks y cerrar tareas abiertas para prevenir recur
                       }}
                     />
                   </label>
+                  <button onClick={createSampleIngestion} className="px-3 py-1 border rounded hover:bg-slate-50">
+                    Cargar archivos de ejemplo
+                  </button>
                   <button onClick={() => downloadSample('277ca')} className="px-3 py-1 border rounded hover:bg-slate-50">
                     Descargar ejemplo 277CA
                   </button>
@@ -3545,7 +3498,7 @@ Próximos pasos: reforzar playbooks y cerrar tareas abiertas para prevenir recur
 
           {view === 'denials' && (
             <div className="flex h-full gap-2">
-              <div className={`${sel || selectedUnderpayment ? 'w-1/2' : 'w-full'} bg-white rounded border flex flex-col`}>
+              <div className={`${sel ? 'w-1/2' : 'w-full'} bg-white rounded border flex flex-col`}>
                 <div className="p-1.5 border-b flex gap-1">
                   <div className="flex-1 relative">
                     <Search className="absolute left-1 top-1/2 -translate-y-1/2 w-3 h-3 text-slate-400" />
@@ -3582,40 +3535,15 @@ Próximos pasos: reforzar playbooks y cerrar tareas abiertas para prevenir recur
                     <Download className="w-3 h-3" />
                   </button>
                 </div>
-                <div className="p-1 border-b flex gap-1 text-xs">
-                  {[
-                    ['all', 'Todo'],
-                    ['denial', 'Denials'],
-                    ['underpayment', 'Underpayments'],
-                  ].map(([key, label]) => (
-                    <button
-                      key={key}
-                      onClick={() => setUnderpaymentFilter(key)}
-                      className={`px-2 py-0.5 rounded border ${underpaymentFilter === key ? 'bg-emerald-50 text-emerald-700' : ''}`}
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </div>
                 <div className="flex-1 overflow-auto">
-                  {filteredQueue.map((item) => {
-                    const claim = item.claim;
-                    if (!claim) return null;
-                    const isUnderpayment = item.type === 'underpayment';
-                    const label = isUnderpayment ? 'Underpayment' : 'Denial';
-                    const amount = isUnderpayment ? item.underpayment.varianceAmount : claim.amount;
-                    const selected = isUnderpayment ? selectedUnderpayment?.id === item.underpayment.id : sel?.id === claim.id;
+                  {filtered.map((claim) => {
+                    const selected = sel?.id === claim.id;
                     return (
                     <div
-                      key={item.id}
+                      key={claim.id}
                       onClick={() => {
-                        if (isUnderpayment) {
-                          setSelectedUnderpaymentId(item.underpayment.id);
-                          setSel(null);
-                        } else {
-                          setSel(claim);
-                          setSelectedUnderpaymentId(null);
-                        }
+                        setSel(claim);
+                        setSelectedUnderpaymentId(null);
                       }}
                       className={`p-1.5 border-b cursor-pointer hover:bg-slate-50 ${
                         selected ? 'bg-emerald-50 border-l-2 border-l-emerald-500' : ''
@@ -3623,29 +3551,24 @@ Próximos pasos: reforzar playbooks y cerrar tareas abiertas para prevenir recur
                     >
                       <div className="flex justify-between">
                         <div className="flex items-center gap-1">
-                          <div className={`w-5 h-5 rounded-full flex items-center justify-center font-bold ${priorityClass(item.prio)}`}>
-                            {item.prio}
+                          <div className={`w-5 h-5 rounded-full flex items-center justify-center font-bold ${priorityClass(claim.prio)}`}>
+                            {claim.prio}
                           </div>
                           <div>
                             <p className="font-medium">{displayName(claim)}</p>
                             <p className="text-slate-500">
-                              {claim.id} • {label}
+                              {claim.id} • Denial
                             </p>
                           </div>
                         </div>
                         <div className="text-right">
-                          <p className="font-semibold">${Math.round(amount).toLocaleString()}</p>
-                          {isUnderpayment ? (
-                            <span className="text-xs text-amber-600">{item.underpayment.status}</span>
-                          ) : (
-                            statusBadge(claim.status)
-                          )}
+                          <p className="font-semibold">${Math.round(claim.amount).toLocaleString()}</p>
+                          {statusBadge(claim.status)}
                         </div>
                       </div>
                       <div className="ml-6 text-slate-500">
-                        {claim.payer} •{' '}
-                        <span className="text-red-600">{isUnderpayment ? item.underpayment.casReasonCode : claim.code}</span> •{' '}
-                        <span className="text-emerald-600">{item.prob}%</span>
+                        {claim.payer} • <span className="text-red-600">{claim.code}</span> •{' '}
+                        <span className="text-emerald-600">{claim.prob}%</span>
                       </div>
                     </div>
                   )})}
@@ -3992,6 +3915,63 @@ Próximos pasos: reforzar playbooks y cerrar tareas abiertas para prevenir recur
                   </div>
                 </div>
               )}
+            </div>
+          )}
+
+          {view === 'underpayments' && (
+            <div className="flex h-full gap-2">
+              <div className={`${selectedUnderpayment ? 'w-1/2' : 'w-full'} bg-white rounded border flex flex-col`}>
+                <div className="p-1.5 border-b flex items-center justify-between">
+                  <div>
+                    <span className="font-semibold">Underpayments (add-on)</span>
+                    <p className="text-xs text-slate-500">Estimaciones basadas en reglas Contract Lite.</p>
+                  </div>
+                  <button onClick={() => setView('addons')} className="text-xs text-emerald-600">
+                    Volver a Add-ons
+                  </button>
+                </div>
+                <div className="flex-1 overflow-auto">
+                  {underpaymentScored.length ? (
+                    [...underpaymentScored]
+                      .sort((a, b) => b.prio - a.prio)
+                      .map((item) => {
+                        const claim = claims.find((c) => c.id === item.claimId);
+                        const selected = selectedUnderpayment?.id === item.id;
+                        return (
+                          <div
+                            key={item.id}
+                            onClick={() => setSelectedUnderpaymentId(item.id)}
+                            className={`p-1.5 border-b cursor-pointer hover:bg-slate-50 ${
+                              selected ? 'bg-emerald-50 border-l-2 border-l-emerald-500' : ''
+                            }`}
+                          >
+                            <div className="flex justify-between">
+                              <div className="flex items-center gap-1">
+                                <div className={`w-5 h-5 rounded-full flex items-center justify-center font-bold ${priorityClass(item.prio)}`}>
+                                  {item.prio}
+                                </div>
+                                <div>
+                                  <p className="font-medium">{claim ? displayName(claim) : item.claimId}</p>
+                                  <p className="text-slate-500">{item.claimId}</p>
+                                </div>
+                              </div>
+                              <div className="text-right">
+                                <p className="font-semibold">${Math.round(item.varianceAmount).toLocaleString()}</p>
+                                <span className="text-xs text-amber-600">{item.status}</span>
+                              </div>
+                            </div>
+                            <div className="ml-6 text-slate-500">
+                              {item.payer} • <span className="text-red-600">{item.casReasonCode || 'CAS'}</span> •{' '}
+                              <span className="text-emerald-600">{item.prob}%</span>
+                            </div>
+                          </div>
+                        );
+                      })
+                  ) : (
+                    <p className="text-slate-400 p-2">Sin underpayments detectados.</p>
+                  )}
+                </div>
+              </div>
               {selectedUnderpayment && (
                 <div className="w-1/2 bg-white rounded border flex flex-col">
                   <div className="p-1.5 border-b flex justify-between">
@@ -4014,7 +3994,10 @@ Próximos pasos: reforzar playbooks y cerrar tareas abiertas para prevenir recur
                     <div className="grid grid-cols-2 gap-1">
                       {[
                         ['Pagador', selectedUnderpayment.payer],
-                        ['Expected (estimado)', selectedUnderpayment.expectedAmount ? `$${Math.round(selectedUnderpayment.expectedAmount)}` : 'Unknown'],
+                        [
+                          'Expected (estimado)',
+                          selectedUnderpayment.expectedAmount ? `$${Math.round(selectedUnderpayment.expectedAmount)}` : 'Unknown',
+                        ],
                         ['Paid', `$${Math.round(selectedUnderpayment.actualPaidAmount)}`],
                         ['Reason', selectedUnderpayment.casReasonCode || 'unknown'],
                       ].map(([label, value]) => (
@@ -4031,6 +4014,82 @@ Próximos pasos: reforzar playbooks y cerrar tareas abiertas para prevenir recur
                   </div>
                 </div>
               )}
+            </div>
+          )}
+
+          {view === 'addons' && (
+            <div className="space-y-2">
+              <div className="bg-white rounded p-2 border">
+                <h2 className="font-semibold">Add-ons (mostrar después del flujo base)</h2>
+                <p className="text-slate-600 mt-1">
+                  Funciones complementarias para extender el core cuando el cliente ya vio intake → cola → auditoría.
+                </p>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                {[
+                  {
+                    title: 'Underpayments Analyzer',
+                    body: 'Estimación de underpayments usando reglas ligeras de contrato.',
+                    target: 'underpayments',
+                  },
+                  {
+                    title: 'Contract Lite',
+                    body: 'Reglas simples por pagador + overrides de CPT (estimados).',
+                    target: 'contract',
+                  },
+                  {
+                    title: 'Insights',
+                    body: 'Resumen rápido por pagador, CPT y motivos.',
+                    target: 'insights',
+                  },
+                  {
+                    title: 'Playbooks',
+                    body: 'Checklists y pasos repetibles para denials frecuentes.',
+                    target: 'playbooks',
+                  },
+                  {
+                    title: 'Prevención',
+                    body: 'Issues que evitan recurrencia y conectan con calidad.',
+                    target: 'prevention',
+                  },
+                  {
+                    title: 'Programa',
+                    body: 'Vista ejecutiva con backlog, causas y prevención.',
+                    target: 'program',
+                  },
+                  {
+                    title: 'Ops Dashboard',
+                    body: 'Métricas operativas y productividad.',
+                    target: 'ops',
+                  },
+                  {
+                    title: 'Pagos',
+                    body: 'Panel de pagos y estado de apelaciones.',
+                    target: 'payments',
+                  },
+                  {
+                    title: 'SFTP (visual)',
+                    body: 'Configuración simulada de conexión con clearinghouse.',
+                    target: 'integrations',
+                  },
+                  {
+                    title: 'Historial de ingestión',
+                    body: 'Detalle por archivo y reprocesos.',
+                    target: 'ingestions',
+                  },
+                ].map((card) => (
+                  <div key={card.title} className="bg-white rounded p-2 border">
+                    <p className="font-semibold">{card.title}</p>
+                    <p className="text-slate-600 mt-1">{card.body}</p>
+                    <button
+                      onClick={() => setView(card.target)}
+                      className="mt-2 px-2 py-0.5 border rounded text-xs hover:bg-slate-50"
+                    >
+                      Abrir
+                    </button>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 
