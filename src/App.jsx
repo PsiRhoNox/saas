@@ -2209,7 +2209,7 @@ Paciente: ${patientName}
   const tourSteps = [
     {
       id: 'nav-denials',
-      title: '1. Denials Inbox',
+      title: '1. Denials Desk',
       body: 'Aquí aparece la cola priorizada con probabilidad y monto.',
     },
     {
@@ -2307,7 +2307,9 @@ Paciente: ${patientName}
     demo: 'Guion de demo',
     dashboard: 'Dashboard',
     ops_queue: 'Ops Queue',
-    denials: 'Denials Inbox',
+    denials: 'Denials Desk',
+    tutorial: 'Tutorial',
+    how: 'Cómo funciona',
     intake: 'Data Intake',
     unmatched: 'Unmatched',
     audit: 'Auditoría',
@@ -2341,13 +2343,16 @@ Paciente: ${patientName}
         </div>
         <nav className="flex-1 p-1 space-y-1">
           {[
-            ['demo', FileText, 'Guion de demo'],
-            ['dashboard', BarChart3, 'Dashboard'],
-            ['ops_queue', Users, 'Ops Queue'],
-            ['denials', AlertCircle, 'Denials Inbox'],
+            ['denials', AlertCircle, 'Denials Desk'],
+            ['tutorial', FileText, 'Tutorial'],
+            ['how', FileText, 'Cómo funciona'],
             ['intake', Upload, 'Data Intake'],
+            ['ops', BarChart3, 'Ops Dashboard'],
+            ['ops_queue', Users, 'Ops Queue'],
+            ['dashboard', BarChart3, 'Dashboard'],
             ['unmatched', Users, 'Unmatched'],
             ['audit', History, 'Auditoría'],
+            ['demo', FileText, 'Guion de demo'],
             ['addons', BarChart3, 'Add-ons'],
           ].map(([id, Icon, label]) => (
             <button
@@ -2476,7 +2481,7 @@ Paciente: ${patientName}
                   </p>
                   <div className="mt-2 flex gap-2">
                     <button onClick={() => setView('denials')} className="px-2 py-0.5 border rounded text-xs hover:bg-slate-50">
-                      Ver Denials Inbox
+                      Ver Denials Desk
                     </button>
                     <button onClick={() => setView('ops_queue')} className="px-2 py-0.5 border rounded text-xs hover:bg-slate-50">
                       Ver Ops Queue
@@ -2497,6 +2502,88 @@ Paciente: ${patientName}
                     </button>
                   </div>
                 </div>
+              </div>
+            </div>
+          )}
+
+          {view === 'tutorial' && (
+            <div className="space-y-2">
+              <div className="bg-white rounded p-2 border">
+                <h2 className="font-semibold">Tutorial rápido</h2>
+                <p className="text-slate-600 mt-1">
+                  Tres pasos para explicar el flujo sin tecnicismos.
+                </p>
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                {[
+                  {
+                    title: '1. Intake',
+                    body: 'El cliente sube 277CA y 835 (o CSV) en piloto. En producción se procesa en servidor.',
+                  },
+                  {
+                    title: '2. Denials Desk',
+                    body: 'La cola se prioriza por monto, antigüedad y reglas del pagador.',
+                  },
+                  {
+                    title: '3. Tareas + Auditoría',
+                    body: 'El equipo ejecuta tareas y todo queda trazable.',
+                  },
+                ].map((card) => (
+                  <div key={card.title} className="bg-white rounded p-2 border">
+                    <p className="font-semibold">{card.title}</p>
+                    <p className="text-slate-600 mt-1">{card.body}</p>
+                  </div>
+                ))}
+              </div>
+              <div className="flex gap-2">
+                <button onClick={() => setView('intake')} className="px-3 py-1 border rounded hover:bg-slate-50">
+                  Ir a Intake
+                </button>
+                <button onClick={() => setView('denials')} className="px-3 py-1 bg-emerald-600 text-white rounded">
+                  Ver Denials Desk
+                </button>
+              </div>
+            </div>
+          )}
+
+          {view === 'how' && (
+            <div className="space-y-2">
+              <div className="bg-white rounded p-2 border">
+                <h2 className="font-semibold">Cómo funciona</h2>
+                <p className="text-slate-600 mt-1">
+                  Historia breve para explicar implementación sin prometer integraciones en demo.
+                </p>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                {[
+                  {
+                    title: 'De dónde salen los archivos',
+                    body: 'El cliente ya recibe 277CA y 835 del clearinghouse o su sistema de facturación.',
+                  },
+                  {
+                    title: 'Modo piloto',
+                    body: 'Sube archivos manualmente y valida la cola antes de automatizar.',
+                  },
+                  {
+                    title: 'Modo producción',
+                    body: 'El intake corre del lado servidor con SFTP/carpeta segura y misma lógica de conciliación.',
+                  },
+                  {
+                    title: 'Si no hay match',
+                    body: 'Va a Unmatched con resolución manual y auditoría.',
+                  },
+                ].map((card) => (
+                  <div key={card.title} className="bg-white rounded p-2 border">
+                    <p className="font-semibold">{card.title}</p>
+                    <p className="text-slate-600 mt-1">{card.body}</p>
+                  </div>
+                ))}
+              </div>
+              <div className="bg-white rounded p-2 border text-xs text-slate-600">
+                <p>
+                  <span className="font-semibold">Resumen:</span> en demo el intake es frontend; en producción corre en servidor con
+                  controles de seguridad y procesamiento automático.
+                </p>
               </div>
             </div>
           )}
@@ -3255,7 +3342,8 @@ Próximos pasos: reforzar playbooks y cerrar tareas abiertas para prevenir recur
               >
                 <h2 className="font-semibold">Data Intake</h2>
                 <p className="text-slate-600 mt-1">
-                  Sube 835, 277CA o CSV. Detectamos el tipo y procesamos en background. ZIP no soportado en el demo.
+                  Sube 835, 277CA o CSV. Detectamos el tipo y procesamos en background. Demo solo frontend; en producción el intake
+                  corre del lado servidor. ZIP no soportado en el demo.
                 </p>
                 <div className="mt-2 flex flex-wrap items-center gap-2">
                   <label className="px-3 py-1 border rounded cursor-pointer bg-white hover:bg-slate-50">
