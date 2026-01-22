@@ -354,6 +354,58 @@ const paymentTone = {
   emerald: 'text-emerald-600',
 };
 
+const TASK_TYPES = [
+  'request_docs',
+  'fix_coding',
+  'call_payer',
+  'submit_corrected_claim',
+  'appeal_draft',
+  'patient_resp_followup',
+];
+
+const TASK_LABELS = {
+  request_docs: 'Solicitar documentación',
+  fix_coding: 'Corregir codificación',
+  call_payer: 'Llamar al pagador',
+  submit_corrected_claim: 'Enviar claim corregido',
+  appeal_draft: 'Borrador de apelación',
+  patient_resp_followup: 'Seguimiento paciente',
+};
+
+const TASK_STATUSES = ['open', 'in_progress', 'blocked', 'done'];
+const OWNER_ROLES = ['coder', 'biller', 'arv_specialist', 'supervisor'];
+const OWNER_ROLE_LABELS = {
+  coder: 'Coder',
+  biller: 'Biller',
+  arv_specialist: 'ARV Specialist',
+  supervisor: 'Supervisor',
+};
+
+const OWNER_POOL = {
+  coder: ['Luis C.', 'María R.'],
+  biller: ['Jorge T.', 'Diana S.'],
+  arv_specialist: ['Ana R.', 'Carlos P.'],
+  supervisor: ['Supervisor'],
+};
+
+const TASK_TYPE_OWNER = {
+  request_docs: 'arv_specialist',
+  fix_coding: 'coder',
+  call_payer: 'biller',
+  submit_corrected_claim: 'biller',
+  appeal_draft: 'arv_specialist',
+  patient_resp_followup: 'arv_specialist',
+};
+
+const TASK_TYPE_SLA_DAYS = {
+  request_docs: 5,
+  fix_coding: 3,
+  call_payer: 2,
+  submit_corrected_claim: 4,
+  appeal_draft: 2,
+  patient_resp_followup: 7,
+};
+
 export default function App() {
   const [view, setView] = useState('dashboard');
   const [sel, setSel] = useState(null);
@@ -370,6 +422,7 @@ export default function App() {
   const [demoMode, setDemoMode] = useState(true);
   const [showTour, setShowTour] = useState(false);
   const [tourStep, setTourStep] = useState(0);
+  const [opsRoleFilter, setOpsRoleFilter] = useState('all');
   const [ingestionRuns, setIngestionRuns] = useState([]);
   const [pendingMappings, setPendingMappings] = useState({});
   const [mappingDrafts, setMappingDrafts] = useState({});
@@ -381,6 +434,7 @@ export default function App() {
   const [unmatched, setUnmatched] = useState([]);
   const [triageResults, setTriageResults] = useState({});
   const [tasks, setTasks] = useState([]);
+  const [taskTypeDraft, setTaskTypeDraft] = useState('request_docs');
   const [integrations, setIntegrations] = useState([
     {
       id: 'int-001',
@@ -512,6 +566,43 @@ export default function App() {
     };
   }, [claims]);
 
+  const opsMetrics = useMemo(() => {
+    const openTasks = tasks.filter((t) => t.status !== 'done');
+    const overdueTasks = openTasks.filter((t) => t.dueDate && new Date(t.dueDate) < new Date());
+    const openDenials = claims.filter((c) => c.status !== 'appealed');
+    const riskAmount = openDenials.reduce((sum, c) => sum + c.amount, 0);
+    const recoverable = openDenials.reduce((sum, c) => sum + c.amount * (c.prob / 100), 0);
+    const completedToday = tasks.filter((t) => t.completedAt && t.completedAt.slice(0, 10) === new Date().toISOString().slice(0, 10));
+    const completedWithDuration = tasks.filter((t) => t.completedAt);
+    const avgCompletionHours =
+      completedWithDuration.length > 0
+        ? Math.round(
+            completedWithDuration.reduce((sum, t) => sum + (new Date(t.completedAt) - new Date(t.createdAt)) / 3600000, 0) /
+              completedWithDuration.length
+          )
+        : 0;
+    const byRole = OWNER_ROLES.map((role) => {
+      const roleTasks = tasks.filter((t) => t.ownerRole === role);
+      const open = roleTasks.filter((t) => t.status !== 'done').length;
+      const done = roleTasks.filter((t) => t.status === 'done').length;
+      return {
+        role,
+        open,
+        done,
+      };
+    });
+    return {
+      backlog: openDenials.length,
+      openTasks: openTasks.length,
+      overdueTasks: overdueTasks.length,
+      riskAmount,
+      recoverable,
+      completedToday: completedToday.length,
+      avgCompletionHours,
+      byRole,
+    };
+  }, [claims, tasks]);
+
   const tutorialSteps = [
     {
       title: '1. El cliente ya recibe 277CA y 835',
@@ -559,6 +650,58 @@ export default function App() {
       payloadHash,
     });
     setAudit((prev) => [entry, ...prev]);
+  };
+
+  const computeDueDate = (taskType, payer) => {
+    const baseDays = TASK_TYPE_SLA_DAYS[taskType] || 5;
+    const payerBoost = payer === 'Medicare' ? -1 : payer === 'Blue Cross' ? 1 : 0;
+    const due = new Date();
+    due.setDate(due.getDate() + Math.max(1, baseDays + payerBoost));
+    return due.toISOString();
+  };
+
+  const assignTaskToRole = (role, existingTasks) => {
+    const pool = OWNER_POOL[role] || ['Equipo'];
+    const counts = pool.map((name) => ({
+      name,
+      count: existingTasks.filter((task) => task.ownerName === name && task.status !== 'done').length,
+    }));
+    counts.sort((a, b) => a.count - b.count);
+    return counts[0]?.name || pool[0];
+  };
+
+  const createTask = ({
+    denialId,
+    claimId,
+    title,
+    taskType,
+    source = 'system',
+    payer,
+    notes,
+    ownerRole,
+    ownerName,
+    dueDate,
+    nextFollowUpAt,
+  }) => {
+    const createdAt = new Date().toISOString();
+    const role = ownerRole || TASK_TYPE_OWNER[taskType] || 'arv_specialist';
+    const assignedName = ownerName || assignTaskToRole(role, tasks);
+    return {
+      id: `task-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      denialId,
+      claimId,
+      title,
+      taskType,
+      status: 'open',
+      ownerRole: role,
+      ownerName: assignedName,
+      dueDate: dueDate || computeDueDate(taskType, payer),
+      nextFollowUpAt: nextFollowUpAt || null,
+      createdAt,
+      completedAt: null,
+      source,
+      notes: notes || '',
+    };
   };
 
   const detectEdiType = (fileName, content) => {
@@ -711,13 +854,15 @@ export default function App() {
     setClaims((prev) => prev.map((c) => (c.id === claim.id ? updated : c)));
     if (sel?.id === claim.id) setSel(updated);
     setTasks((prev) => [
-      {
-        id: Date.now(),
+      createTask({
+        denialId: claim.id,
         claimId: claim.id,
         title: result.suggested_action_short,
-        owner: result.who_should_work_it,
-        status: 'open',
-      },
+        taskType: 'appeal_draft',
+        source: 'ai',
+        payer: claim.payer,
+        notes: 'Sugerencia automática basada en denial.',
+      }),
       ...prev,
     ]);
     logAudit({
@@ -1381,11 +1526,179 @@ Paciente: ${patientName}
     });
   };
 
+  const buildPlanTasksForClaim = (claim) => {
+    const tasksToCreate = [];
+    const reason = (claim.reason || '').toLowerCase();
+    if (claim.amount > 5000 || claim.code?.startsWith('CO') || claim.code?.startsWith('PR')) {
+      tasksToCreate.push({
+        taskType: 'appeal_draft',
+        title: `Borrador de apelación para ${claim.id}`,
+      });
+    }
+    if (reason.includes('document') || reason.includes('info') || reason.includes('labor')) {
+      tasksToCreate.push({
+        taskType: 'request_docs',
+        title: `Solicitar documentación para ${claim.id}`,
+      });
+    }
+    if (reason.includes('coding') || reason.includes('dx') || reason.includes('cpt')) {
+      tasksToCreate.push({
+        taskType: 'fix_coding',
+        title: `Revisar codificación para ${claim.id}`,
+      });
+    }
+    if (claim.payer) {
+      tasksToCreate.push({
+        taskType: 'call_payer',
+        title: `Llamar al pagador ${claim.payer} por ${claim.id}`,
+        nextFollowUpAt: new Date(Date.now() + 2 * 86400000).toISOString(),
+      });
+    }
+    if (!tasksToCreate.length) {
+      tasksToCreate.push({
+        taskType: 'submit_corrected_claim',
+        title: `Enviar claim corregido ${claim.id}`,
+      });
+    }
+    return tasksToCreate.slice(0, 3);
+  };
+
+  const createDailyPlan = () => {
+    const maxTasks = Math.min(12, Math.max(5, Math.floor(claims.length / 2)));
+    const prioritized = [...claims].sort((a, b) => b.prio - a.prio).slice(0, maxTasks);
+    const newTasks = [];
+    prioritized.forEach((claim) => {
+      buildPlanTasksForClaim(claim).forEach((entry) => {
+        if (newTasks.length >= maxTasks) return;
+        newTasks.push(
+          createTask({
+            denialId: claim.id,
+            claimId: claim.id,
+            title: entry.title,
+            taskType: entry.taskType,
+            source: 'system',
+            payer: claim.payer,
+            nextFollowUpAt: entry.nextFollowUpAt || null,
+            notes: `Plan diario para ${claim.id}.`,
+          })
+        );
+      });
+    });
+    if (!newTasks.length) return;
+    setTasks((prev) => [...newTasks, ...prev]);
+    logAudit({
+      action: 'Sistema creó plan operativo de hoy',
+      claimId: 'OPS',
+      detail: `${newTasks.length} tareas generadas`,
+      source: 'system',
+    });
+    newTasks.forEach((task) => {
+      logAudit({
+        action: 'Sistema creó tarea del plan diario',
+        claimId: task.claimId,
+        detail: `${TASK_LABELS[task.taskType] || task.taskType} • ${OWNER_ROLE_LABELS[task.ownerRole]}`,
+        source: 'system',
+      });
+    });
+    return newTasks;
+  };
+
+  const updateTask = (taskId, updater) => {
+    setTasks((prev) => prev.map((task) => (task.id === taskId ? updater(task) : task)));
+  };
+
+  const reassignTask = (taskId, role) => {
+    const currentTasks = tasks.filter((task) => task.id !== taskId);
+    const ownerName = assignTaskToRole(role, currentTasks);
+    updateTask(taskId, (task) => ({
+      ...task,
+      ownerRole: role,
+      ownerName,
+    }));
+    logAudit({
+      action: 'Usuario reasignó tarea',
+      claimId: tasks.find((t) => t.id === taskId)?.claimId || 'TASK',
+      detail: `Rol ${OWNER_ROLE_LABELS[role]} → ${ownerName}`,
+      source: 'user',
+    });
+  };
+
+  const completeTask = (taskId, source = 'user') => {
+    updateTask(taskId, (task) => ({
+      ...task,
+      status: 'done',
+      completedAt: new Date().toISOString(),
+    }));
+    logAudit({
+      action: source === 'system' ? 'Sistema marcó tarea como hecha' : 'Usuario marcó tarea como hecha',
+      claimId: tasks.find((t) => t.id === taskId)?.claimId || 'TASK',
+      detail: 'Tarea completada',
+      source: source === 'system' ? 'system' : 'user',
+    });
+  };
+
+  const escalateTask = (taskId) => {
+    updateTask(taskId, (task) => ({
+      ...task,
+      status: 'blocked',
+      ownerRole: 'supervisor',
+      ownerName: OWNER_POOL.supervisor[0],
+    }));
+    logAudit({
+      action: 'Usuario escaló tarea a supervisor',
+      claimId: tasks.find((t) => t.id === taskId)?.claimId || 'TASK',
+      detail: 'Bloqueado por escalación',
+      source: 'user',
+    });
+  };
+
+  const createTaskForDenial = (claim, taskType, source = 'user') => {
+    const task = createTask({
+      denialId: claim.id,
+      claimId: claim.id,
+      title: `${TASK_LABELS[taskType]} para ${claim.id}`,
+      taskType,
+      source,
+      payer: claim.payer,
+      notes: source === 'ai' ? 'Sugerencia automática del sistema.' : 'Creado manualmente.',
+    });
+    setTasks((prev) => [task, ...prev]);
+    logAudit({
+      action: source === 'ai' ? 'Sistema creó tarea sugerida' : 'Usuario creó tarea',
+      claimId: claim.id,
+      detail: TASK_LABELS[taskType],
+      source: source === 'ai' ? 'system' : 'user',
+      aiDecision: source === 'ai',
+      requestId: source === 'ai' ? `auto-${task.id}` : null,
+      latencyMs: source === 'ai' ? Math.round(Math.random() * 120 + 80) : null,
+      result: 'ok',
+    });
+  };
+
+  const applySuggestedTasks = (claim) => {
+    const action = (claim.action || '').toLowerCase();
+    const suggested = [];
+    if (action.includes('document')) {
+      suggested.push('request_docs');
+    }
+    if (action.includes('cpt') || action.includes('coding') || action.includes('dx')) {
+      suggested.push('fix_coding');
+    }
+    if (action.includes('paciente') || action.includes('patient')) {
+      suggested.push('patient_resp_followup');
+    }
+    if (!suggested.length) {
+      suggested.push('appeal_draft');
+    }
+    const unique = [...new Set(suggested)].slice(0, 3);
+    unique.forEach((taskType) => createTaskForDenial(claim, taskType, 'ai'));
+  };
+
+
   const filtered = claims
     .filter(
       (c) =>
         ((c.patient.toLowerCase().includes(search.toLowerCase()) ||
-          maskName(c.patient).toLowerCase().includes(search.toLowerCase()) ||
           c.id.toLowerCase().includes(search.toLowerCase())) &&
           (filter === 'all' || c.status === filter))
     )
@@ -1444,6 +1757,7 @@ Paciente: ${patientName}
       detail: 'Seleccionamos el denial más prioritario',
       source: 'system',
     });
+    const planned = createDailyPlan() || [];
     updateStatus(top.id, 'in_progress');
     logAudit({
       action: 'Sistema cambió estado a En proceso',
@@ -1464,6 +1778,15 @@ Paciente: ${patientName}
       detail: 'Reunir documentos y reenviar al pagador',
       source: 'system',
     });
+    if (planned.length) {
+      completeTask(planned[0].id, 'system');
+      logAudit({
+        action: 'Sistema cerró una tarea del plan',
+        claimId: planned[0].claimId,
+        detail: TASK_LABELS[planned[0].taskType] || planned[0].taskType,
+        source: 'system',
+      });
+    }
     logAudit({
       action: 'Recorrido rápido completado',
       claimId: top.id,
@@ -1507,6 +1830,8 @@ Paciente: ${patientName}
             ['dashboard', BarChart3, 'Dashboard'],
             ['tutorial', FileText, 'Cómo llegan los denials'],
             ['how', FileText, 'Cómo funciona'],
+            ['ops', BarChart3, 'Ops Dashboard'],
+            ['ops_queue', Users, 'Ops Queue'],
             ['intake', Upload, 'Data Intake'],
             ['ingestions', History, 'Historial de ingestión'],
             ['denials', AlertCircle, 'Denials Inbox'],
@@ -1546,6 +1871,10 @@ Paciente: ${patientName}
                 ? 'Cómo llegan los denials'
                 : view === 'how'
                   ? 'Cómo funciona'
+                  : view === 'ops'
+                    ? 'Ops Dashboard'
+                    : view === 'ops_queue'
+                      ? 'Ops Queue'
                   : view === 'intake'
                     ? 'Data Intake'
                     : view === 'ingestions'
@@ -1699,6 +2028,140 @@ Paciente: ${patientName}
                   <span className="font-semibold">Resumen:</span> No enviamos 837. Consumimos 277CA y 835 de forma confiable para
                   poblar la Denials Inbox.
                 </p>
+              </div>
+            </div>
+          )}
+
+          {view === 'ops' && (
+            <div className="space-y-2">
+              <div className="bg-white rounded p-2 border flex items-center justify-between">
+                <div>
+                  <h2 className="font-semibold">Ops Dashboard</h2>
+                  <p className="text-slate-600 mt-1">Vista operacional para AR Recovery y Denials Ops.</p>
+                </div>
+                <button onClick={createDailyPlan} className="px-3 py-1 bg-emerald-600 text-white rounded">
+                  Crear plan de hoy
+                </button>
+              </div>
+              <div className="grid grid-cols-4 gap-2">
+                {[
+                  ['Backlog denials', opsMetrics.backlog],
+                  ['Tareas abiertas', opsMetrics.openTasks],
+                  ['Tareas vencidas', opsMetrics.overdueTasks],
+                  ['Completadas hoy', opsMetrics.completedToday],
+                  ['Monto en riesgo', `$${Math.round(opsMetrics.riskAmount).toLocaleString()}`],
+                  ['Monto recuperable', `$${Math.round(opsMetrics.recoverable).toLocaleString()}`],
+                  ['Tiempo promedio (h)', opsMetrics.avgCompletionHours],
+                ].map(([label, value]) => (
+                  <div key={label} className="bg-white rounded p-2 border">
+                    <p className="text-slate-500">{label}</p>
+                    <p className="text-lg font-bold">{value}</p>
+                  </div>
+                ))}
+              </div>
+              <div className="bg-white rounded p-2 border">
+                <p className="font-semibold">Productividad por rol</p>
+                <table className="w-full mt-2 text-xs">
+                  <thead>
+                    <tr className="text-left text-slate-400">
+                      <th className="py-1">Rol</th>
+                      <th>Abiertas</th>
+                      <th>Completadas</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {opsMetrics.byRole.map((row) => (
+                      <tr key={row.role} className="border-t">
+                        <td className="py-1">{OWNER_ROLE_LABELS[row.role]}</td>
+                        <td>{row.open}</td>
+                        <td>{row.done}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {view === 'ops_queue' && (
+            <div className="space-y-2">
+              <div className="bg-white rounded p-2 border flex items-center justify-between">
+                <div>
+                  <h2 className="font-semibold">Ops Queue</h2>
+                  <p className="text-slate-600 mt-1">Tareas asignadas y no asignadas por rol.</p>
+                </div>
+                <button onClick={createDailyPlan} className="px-3 py-1 bg-emerald-600 text-white rounded">
+                  Crear plan de hoy
+                </button>
+              </div>
+              <div className="bg-white rounded p-2 border flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="text-slate-500 text-xs">Filtrar por rol</span>
+                  <select
+                    value={opsRoleFilter}
+                    onChange={(e) => setOpsRoleFilter(e.target.value)}
+                    className="border rounded px-2 py-1 text-xs"
+                  >
+                    <option value="all">Todos</option>
+                    {OWNER_ROLES.map((role) => (
+                      <option key={role} value={role}>
+                        {OWNER_ROLE_LABELS[role]}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <span className="text-xs text-slate-400">{tasks.length} tareas</span>
+              </div>
+              <div className="space-y-2">
+                {tasks
+                  .filter((task) => (opsRoleFilter === 'all' ? true : task.ownerRole === opsRoleFilter))
+                  .map((task) => {
+                    const overdue = task.dueDate && new Date(task.dueDate) < new Date() && task.status !== 'done';
+                    return (
+                      <div key={task.id} className="bg-white rounded p-2 border">
+                        <div className="flex justify-between">
+                          <div>
+                            <p className="font-medium">
+                              {task.title} {overdue ? <span className="text-red-600 text-xs">Atrasado</span> : null}
+                            </p>
+                            <p className="text-slate-500 text-xs">
+                              {TASK_LABELS[task.taskType]} • {OWNER_ROLE_LABELS[task.ownerRole]} • {task.ownerName}
+                            </p>
+                            <p className="text-slate-400 text-xs">
+                              Estado: {task.status} • SLA: {task.dueDate ? task.dueDate.slice(0, 10) : 'n/a'}
+                            </p>
+                          </div>
+                          <div className="flex gap-2 items-start">
+                            <select
+                              value={task.ownerRole}
+                              onChange={(e) => reassignTask(task.id, e.target.value)}
+                              className="border rounded px-1 text-xs"
+                            >
+                              {OWNER_ROLES.map((role) => (
+                                <option key={role} value={role}>
+                                  {OWNER_ROLE_LABELS[role]}
+                                </option>
+                              ))}
+                            </select>
+                            <button
+                              onClick={() => completeTask(task.id)}
+                              className="px-2 py-1 bg-emerald-600 text-white rounded text-xs"
+                            >
+                              Marcar done
+                            </button>
+                            <button
+                              onClick={() => escalateTask(task.id)}
+                              className="px-2 py-1 border rounded text-xs"
+                            >
+                              Escalar
+                            </button>
+                          </div>
+                        </div>
+                        {task.notes ? <p className="text-slate-500 text-xs mt-1">{task.notes}</p> : null}
+                      </div>
+                    );
+                  })}
+                {!tasks.length ? <p className="text-slate-400">Sin tareas creadas.</p> : null}
               </div>
             </div>
           )}
@@ -2139,6 +2602,63 @@ Paciente: ${patientName}
                         Sin triage IA todavía. Sube un 277CA/835 en Data Intake para generar sugerencias.
                       </div>
                     )}
+                    <div className="p-2 bg-white border rounded">
+                      <div className="flex justify-between items-center">
+                        <span className="font-semibold">Work plan</span>
+                        <div className="flex gap-2">
+                          <select
+                            value={taskTypeDraft}
+                            onChange={(e) => setTaskTypeDraft(e.target.value)}
+                            className="border rounded px-1 text-xs"
+                          >
+                            {TASK_TYPES.map((type) => (
+                              <option key={type} value={type}>
+                                {TASK_LABELS[type]}
+                              </option>
+                            ))}
+                          </select>
+                          <button
+                            onClick={() => createTaskForDenial(sel, taskTypeDraft, 'user')}
+                            className="px-2 py-0.5 border rounded text-xs"
+                          >
+                            Crear tarea
+                          </button>
+                          <button
+                            onClick={() => applySuggestedTasks(sel)}
+                            className="px-2 py-0.5 bg-emerald-600 text-white rounded text-xs"
+                          >
+                            Aplicar sugerencia
+                          </button>
+                        </div>
+                      </div>
+                      <div className="mt-2 space-y-1 text-xs">
+                        {tasks.filter((t) => t.claimId === sel.id).length ? (
+                          tasks
+                            .filter((t) => t.claimId === sel.id)
+                            .map((t) => (
+                              <div key={t.id} className="flex justify-between border-b last:border-0 py-1">
+                                <div>
+                                  <p className="font-medium">{t.title}</p>
+                                  <p className="text-slate-500">
+                                    {TASK_LABELS[t.taskType]} • {OWNER_ROLE_LABELS[t.ownerRole]} • {t.ownerName}
+                                  </p>
+                                </div>
+                                <div className="text-right">
+                                  <p className="text-slate-500">Estado: {t.status}</p>
+                                  <button
+                                    onClick={() => completeTask(t.id)}
+                                    className="text-emerald-600 text-xs"
+                                  >
+                                    Marcar done
+                                  </button>
+                                </div>
+                              </div>
+                            ))
+                        ) : (
+                          <p className="text-slate-400">Sin tareas aún.</p>
+                        )}
+                      </div>
+                    </div>
                     <div className="p-1.5 bg-slate-50 rounded">
                       <div className="flex items-center justify-between">
                         <p className="font-semibold">Scoring</p>
