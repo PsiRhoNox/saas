@@ -406,6 +406,11 @@ const TASK_TYPE_SLA_DAYS = {
   patient_resp_followup: 7,
 };
 
+const PLAYBOOK_CATEGORIES = ['coding', 'eligibility', 'documentation', 'medical_necessity', 'authorization', 'unknown'];
+const QUALITY_GAP_FLAGS = ['auth', 'eligibilidad', 'coding', 'medical_necessity', 'documentation'];
+const PREVENTION_STATUSES = ['open', 'in_progress', 'shipped'];
+const PREVENTION_OWNER_ROLES = ['coding', 'front_desk', 'auth_team', 'clinical'];
+
 export default function App() {
   const [view, setView] = useState('dashboard');
   const [sel, setSel] = useState(null);
@@ -435,6 +440,23 @@ export default function App() {
   const [triageResults, setTriageResults] = useState({});
   const [tasks, setTasks] = useState([]);
   const [taskTypeDraft, setTaskTypeDraft] = useState('request_docs');
+  const [playbooks, setPlaybooks] = useState([]);
+  const [playbookDraft, setPlaybookDraft] = useState({
+    name: '',
+    category: 'unknown',
+    conditions: { payer: '', reasonCode: '', minAmount: '' },
+    steps: [''],
+    documents: [''],
+    clinicalReviewRequired: false,
+    appealAngle: '',
+    qualityFields: [],
+  });
+  const [editingPlaybookId, setEditingPlaybookId] = useState(null);
+  const [playbookUsage, setPlaybookUsage] = useState({});
+  const [preventionIssues, setPreventionIssues] = useState([]);
+  const [selectedIssueId, setSelectedIssueId] = useState('');
+  const [selectedPlaybookId, setSelectedPlaybookId] = useState('');
+  const [programSummary, setProgramSummary] = useState('');
   const [integrations, setIntegrations] = useState([
     {
       id: 'int-001',
@@ -465,6 +487,9 @@ export default function App() {
       setUnmatched(stored.unmatched || []);
       setTriageResults(stored.triageResults || {});
       setTasks(stored.tasks || []);
+      setPlaybooks(stored.playbooks || []);
+      setPlaybookUsage(stored.playbookUsage || {});
+      setPreventionIssues(stored.preventionIssues || []);
       setIntegrations(stored.integrations || integrations);
       if (stored.date) setDate(new Date(stored.date));
       const seeded = hydrateClaims(stored.claims || initClaims, stored.date || date, stored.rules || defaultRules);
@@ -532,6 +557,9 @@ export default function App() {
       unmatched,
       triageResults,
       tasks,
+      playbooks,
+      playbookUsage,
+      preventionIssues,
       integrations,
     });
   }, [
@@ -550,6 +578,9 @@ export default function App() {
     unmatched,
     triageResults,
     tasks,
+    playbooks,
+    playbookUsage,
+    preventionIssues,
     integrations,
   ]);
 
@@ -603,6 +634,55 @@ export default function App() {
     };
   }, [claims, tasks]);
 
+  const programMetrics = useMemo(() => {
+    const backlog = claims.length;
+    const riskAmount = claims.reduce((sum, c) => sum + c.amount, 0);
+    const stageCounts = {
+      new: claims.filter((c) => c.status === 'pending').length,
+      in_progress: claims.filter((c) => c.status === 'in_progress').length,
+      appeal_pending: claims.filter((c) => c.status === 'appealed').length,
+      resolved: claims.filter((c) => c.status === 'resolved').length,
+    };
+    const avgQueueDays =
+      claims.length > 0
+        ? Math.round(
+            claims.reduce((sum, c) => sum + (new Date() - new Date(c.denied || c.submitted)) / 86400000, 0) / claims.length
+          )
+        : 0;
+    const topCauses = [...claims]
+      .reduce((acc, c) => {
+        const key = c.root_cause_bucket || c.code || 'unknown';
+        acc[key] = (acc[key] || 0) + c.amount;
+        return acc;
+      }, {})
+      ;
+    const topCauseEntries = Object.entries(topCauses)
+      .map(([key, total]) => ({ key, total }))
+      .sort((a, b) => b.total - a.total)
+      .slice(0, 3);
+    const topPlaybooks = Object.entries(playbookUsage)
+      .map(([id, count]) => ({ id, count, name: playbooks.find((pb) => pb.id === id)?.name || id }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 3);
+    const topIssues = preventionIssues
+      .map((issue) => ({
+        id: issue.id,
+        title: issue.title,
+        impact: issue.impactEstimate || 0,
+      }))
+      .sort((a, b) => b.impact - a.impact)
+      .slice(0, 3);
+    return {
+      backlog,
+      riskAmount,
+      stageCounts,
+      avgQueueDays,
+      topCauseEntries,
+      topPlaybooks,
+      topIssues,
+    };
+  }, [claims, playbookUsage, playbooks, preventionIssues]);
+
   const tutorialSteps = [
     {
       title: '1. El cliente ya recibe 277CA y 835',
@@ -650,6 +730,192 @@ export default function App() {
       payloadHash,
     });
     setAudit((prev) => [entry, ...prev]);
+  };
+
+  const updateClaimFields = (claimId, updates, detail) => {
+    setClaims((prev) =>
+      prev.map((c) =>
+        c.id === claimId
+          ? {
+              ...c,
+              ...updates,
+              ...score({ ...c, ...updates }, date, rules),
+            }
+          : c
+      )
+    );
+    logAudit({
+      action: 'Usuario actualizó campos del denial',
+      claimId,
+      detail,
+      source: 'user',
+    });
+  };
+
+  const createPlaybook = (payload) => {
+    const id = `pb-${Date.now()}`;
+    const playbook = {
+      id,
+      version: 1,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      ...payload,
+    };
+    setPlaybooks((prev) => [playbook, ...prev]);
+    logAudit({
+      action: 'Usuario creó playbook',
+      claimId: 'PLAYBOOK',
+      detail: `${playbook.name} v${playbook.version}`,
+      source: 'user',
+    });
+  };
+
+  const updatePlaybook = (playbookId, payload) => {
+    setPlaybooks((prev) =>
+      prev.map((pb) =>
+        pb.id === playbookId
+          ? {
+              ...pb,
+              ...payload,
+              updatedAt: new Date().toISOString(),
+            }
+          : pb
+      )
+    );
+    logAudit({
+      action: 'Usuario editó playbook',
+      claimId: 'PLAYBOOK',
+      detail: `${payload.name || 'Playbook'} actualizado`,
+      source: 'user',
+    });
+  };
+
+  const duplicatePlaybook = (playbook) => {
+    const copy = {
+      ...playbook,
+      id: `pb-${Date.now()}`,
+      name: `${playbook.name} (copia)`,
+      version: 1,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    setPlaybooks((prev) => [copy, ...prev]);
+    logAudit({
+      action: 'Usuario duplicó playbook',
+      claimId: 'PLAYBOOK',
+      detail: `${playbook.name} → ${copy.name}`,
+      source: 'user',
+    });
+  };
+
+  const versionPlaybook = (playbook) => {
+    const next = {
+      ...playbook,
+      id: `pb-${Date.now()}`,
+      version: playbook.version + 1,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    setPlaybooks((prev) => [next, ...prev]);
+    logAudit({
+      action: 'Usuario versionó playbook',
+      claimId: 'PLAYBOOK',
+      detail: `${playbook.name} v${next.version}`,
+      source: 'user',
+    });
+  };
+
+  const applyPlaybookToClaim = (playbook, claim) => {
+    const steps = playbook.steps.filter(Boolean);
+    const docs = playbook.documents.filter(Boolean);
+    const nextTriage = {
+      suggested_action_short: steps[0] || claim.action || 'Revisar',
+      suggested_action_steps: steps.length ? steps : [claim.action || 'Revisar expediente'],
+      required_documents: docs.length ? docs : ['Documentación faltante'],
+      appeal_angle: playbook.appealAngle || 'Revisar caso con documentación.',
+      appeal_recommended: playbook.clinicalReviewRequired,
+    };
+    setTriageResults((prev) => ({ ...prev, [claim.id]: { ...prev[claim.id], ...nextTriage } }));
+    updateClaimFields(
+      claim.id,
+      {
+        action: nextTriage.suggested_action_short,
+        denial_category_normalized: playbook.category,
+        root_cause_bucket: playbook.category,
+        quality_gap_flags: playbook.qualityFields || [],
+        clinical_review_required: playbook.clinicalReviewRequired,
+      },
+      `Playbook aplicado: ${playbook.name}`
+    );
+    setPlaybookUsage((prev) => ({
+      ...prev,
+      [playbook.id]: (prev[playbook.id] || 0) + 1,
+    }));
+    logAudit({
+      action: 'Usuario aplicó playbook',
+      claimId: claim.id,
+      detail: `${playbook.name} v${playbook.version} • ${playbook.id}`,
+      source: 'user',
+      requestId: `playbook-${playbook.id}-v${playbook.version}`,
+    });
+  };
+
+  const buildPreventionSuggestions = () => {
+    const byCode = {};
+    claims.forEach((claim) => {
+      const key = claim.code || 'unknown';
+      if (!byCode[key]) {
+        byCode[key] = { code: key, total: 0, count: 0, payer: claim.payer };
+      }
+      byCode[key].total += claim.amount || 0;
+      byCode[key].count += 1;
+    });
+    return Object.values(byCode)
+      .sort((a, b) => b.total - a.total)
+      .slice(0, 5);
+  };
+
+  const createPreventionIssue = (payload) => {
+    const issue = {
+      id: `issue-${Date.now()}`,
+      createdAt: new Date().toISOString(),
+      status: 'open',
+      linkedClaimIds: [],
+      ...payload,
+    };
+    setPreventionIssues((prev) => [issue, ...prev]);
+    logAudit({
+      action: 'Usuario creó issue de prevención',
+      claimId: 'PREVENTION',
+      detail: issue.title,
+      source: 'user',
+    });
+    return issue;
+  };
+
+  const linkIssueToClaim = (issueId, claim) => {
+    setPreventionIssues((prev) =>
+      prev.map((issue) => {
+        if (issue.id !== issueId) return issue;
+        const linkedClaimIds = [...new Set([...(issue.linkedClaimIds || []), claim.id])];
+        const impactEstimate = linkedClaimIds.reduce((sum, id) => {
+          const linked = claims.find((c) => c.id === id);
+          return sum + (linked?.amount || 0);
+        }, 0);
+        return { ...issue, linkedClaimIds, impactEstimate };
+      })
+    );
+    updateClaimFields(
+      claim.id,
+      { prevention_issue_ids: [...new Set([...(claim.prevention_issue_ids || []), issueId])] },
+      'Denial vinculado a prevención'
+    );
+    logAudit({
+      action: 'Usuario vinculó denial a prevención',
+      claimId: claim.id,
+      detail: `Issue ${issueId}`,
+      source: 'user',
+    });
   };
 
   const computeDueDate = (taskType, payer) => {
@@ -848,6 +1114,10 @@ export default function App() {
     const updated = {
       ...claim,
       action: result.suggested_action_short,
+      denial_category_normalized: result.denial_category_normalized || claim.denial_category_normalized || 'unknown',
+      root_cause_bucket: result.root_cause_guess?.label || claim.root_cause_bucket || 'unknown',
+      quality_gap_flags: claim.quality_gap_flags || [],
+      clinical_review_required: result.appeal_recommended || false,
       prio: adjusted,
       status: claim.status === 'pending' ? 'in_progress' : claim.status,
     };
@@ -1832,6 +2102,9 @@ Paciente: ${patientName}
             ['how', FileText, 'Cómo funciona'],
             ['ops', BarChart3, 'Ops Dashboard'],
             ['ops_queue', Users, 'Ops Queue'],
+            ['playbooks', FileText, 'Playbooks'],
+            ['prevention', AlertCircle, 'Prevención'],
+            ['program', BarChart3, 'Programa'],
             ['intake', Upload, 'Data Intake'],
             ['ingestions', History, 'Historial de ingestión'],
             ['denials', AlertCircle, 'Denials Inbox'],
@@ -1871,10 +2144,16 @@ Paciente: ${patientName}
                 ? 'Cómo llegan los denials'
                 : view === 'how'
                   ? 'Cómo funciona'
-                  : view === 'ops'
-                    ? 'Ops Dashboard'
-                    : view === 'ops_queue'
-                      ? 'Ops Queue'
+                : view === 'ops'
+                  ? 'Ops Dashboard'
+                  : view === 'ops_queue'
+                    ? 'Ops Queue'
+                    : view === 'playbooks'
+                      ? 'Playbooks'
+                      : view === 'prevention'
+                        ? 'Prevención'
+                        : view === 'program'
+                          ? 'Programa'
                   : view === 'intake'
                     ? 'Data Intake'
                     : view === 'ingestions'
@@ -2163,6 +2442,375 @@ Paciente: ${patientName}
                   })}
                 {!tasks.length ? <p className="text-slate-400">Sin tareas creadas.</p> : null}
               </div>
+            </div>
+          )}
+
+          {view === 'playbooks' && (
+            <div className="space-y-2">
+              <div className="bg-white rounded p-2 border">
+                <h2 className="font-semibold">Playbooks operativos y clínicos</h2>
+                <p className="text-slate-600 mt-1">Plantillas por categoría de denial con pasos y checklist.</p>
+              </div>
+              <div className="bg-white rounded p-2 border">
+                <p className="font-semibold">{editingPlaybookId ? 'Editar playbook' : 'Nuevo playbook'}</p>
+                <div className="grid grid-cols-2 gap-2 mt-2">
+                  <input
+                    value={playbookDraft.name}
+                    onChange={(e) => setPlaybookDraft((prev) => ({ ...prev, name: e.target.value }))}
+                    placeholder="Nombre"
+                    className="border rounded p-1"
+                  />
+                  <select
+                    value={playbookDraft.category}
+                    onChange={(e) => setPlaybookDraft((prev) => ({ ...prev, category: e.target.value }))}
+                    className="border rounded p-1"
+                  >
+                    {PLAYBOOK_CATEGORIES.map((cat) => (
+                      <option key={cat} value={cat}>
+                        {cat}
+                      </option>
+                    ))}
+                  </select>
+                  <input
+                    value={playbookDraft.conditions.payer}
+                    onChange={(e) =>
+                      setPlaybookDraft((prev) => ({ ...prev, conditions: { ...prev.conditions, payer: e.target.value } }))
+                    }
+                    placeholder="Condición pagador"
+                    className="border rounded p-1"
+                  />
+                  <input
+                    value={playbookDraft.conditions.reasonCode}
+                    onChange={(e) =>
+                      setPlaybookDraft((prev) => ({ ...prev, conditions: { ...prev.conditions, reasonCode: e.target.value } }))
+                    }
+                    placeholder="Reason code"
+                    className="border rounded p-1"
+                  />
+                  <input
+                    value={playbookDraft.conditions.minAmount}
+                    onChange={(e) =>
+                      setPlaybookDraft((prev) => ({ ...prev, conditions: { ...prev.conditions, minAmount: e.target.value } }))
+                    }
+                    placeholder="Monto mínimo"
+                    className="border rounded p-1"
+                  />
+                  <label className="flex items-center gap-2 text-xs">
+                    <input
+                      type="checkbox"
+                      checked={playbookDraft.clinicalReviewRequired}
+                      onChange={(e) => setPlaybookDraft((prev) => ({ ...prev, clinicalReviewRequired: e.target.checked }))}
+                    />
+                    Requiere revisión clínica
+                  </label>
+                  <textarea
+                    value={playbookDraft.appealAngle}
+                    onChange={(e) => setPlaybookDraft((prev) => ({ ...prev, appealAngle: e.target.value }))}
+                    placeholder="Ángulo de apelación"
+                    className="border rounded p-1 col-span-2"
+                  />
+                  <textarea
+                    value={playbookDraft.steps.join('\n')}
+                    onChange={(e) => setPlaybookDraft((prev) => ({ ...prev, steps: e.target.value.split('\n') }))}
+                    placeholder="Pasos recomendados (1 por línea)"
+                    className="border rounded p-1 col-span-2"
+                  />
+                  <textarea
+                    value={playbookDraft.documents.join('\n')}
+                    onChange={(e) => setPlaybookDraft((prev) => ({ ...prev, documents: e.target.value.split('\n') }))}
+                    placeholder="Documentos requeridos (1 por línea)"
+                    className="border rounded p-1 col-span-2"
+                  />
+                  <div className="col-span-2 text-xs text-slate-600">
+                    <p className="font-semibold">Campos de calidad</p>
+                    <div className="flex flex-wrap gap-2 mt-1">
+                      {QUALITY_GAP_FLAGS.map((flag) => (
+                        <label key={flag} className="flex items-center gap-1">
+                          <input
+                            type="checkbox"
+                            checked={playbookDraft.qualityFields.includes(flag)}
+                            onChange={(e) => {
+                              setPlaybookDraft((prev) => ({
+                                ...prev,
+                                qualityFields: e.target.checked
+                                  ? [...prev.qualityFields, flag]
+                                  : prev.qualityFields.filter((item) => item !== flag),
+                              }));
+                            }}
+                          />
+                          {flag}
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+                <div className="mt-2 flex gap-2">
+                  <button
+                    onClick={() => {
+                      if (!playbookDraft.name) return;
+                      if (editingPlaybookId) {
+                        updatePlaybook(editingPlaybookId, playbookDraft);
+                      } else {
+                        createPlaybook(playbookDraft);
+                      }
+                      setEditingPlaybookId(null);
+                      setPlaybookDraft({
+                        name: '',
+                        category: 'unknown',
+                        conditions: { payer: '', reasonCode: '', minAmount: '' },
+                        steps: [''],
+                        documents: [''],
+                        clinicalReviewRequired: false,
+                        appealAngle: '',
+                        qualityFields: [],
+                      });
+                    }}
+                    className="px-3 py-1 bg-emerald-600 text-white rounded"
+                  >
+                    {editingPlaybookId ? 'Guardar cambios' : 'Crear playbook'}
+                  </button>
+                  {editingPlaybookId ? (
+                    <button
+                      onClick={() => {
+                        setEditingPlaybookId(null);
+                        setPlaybookDraft({
+                          name: '',
+                          category: 'unknown',
+                          conditions: { payer: '', reasonCode: '', minAmount: '' },
+                          steps: [''],
+                          documents: [''],
+                          clinicalReviewRequired: false,
+                          appealAngle: '',
+                          qualityFields: [],
+                        });
+                      }}
+                      className="px-3 py-1 border rounded"
+                    >
+                      Cancelar
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+              <div className="bg-white rounded p-2 border">
+                <p className="font-semibold">Playbooks guardados</p>
+                <div className="mt-2 space-y-2">
+                  {playbooks.map((pb) => (
+                    <div key={pb.id} className="p-2 bg-slate-50 rounded flex justify-between items-start">
+                      <div>
+                        <p className="font-medium">
+                          {pb.name} <span className="text-xs text-slate-500">v{pb.version}</span>
+                        </p>
+                        <p className="text-xs text-slate-500">
+                          {pb.category} • {pb.conditions?.payer || 'Cualquier pagador'}
+                        </p>
+                        <p className="text-xs text-slate-400">
+                          Pasos: {pb.steps.filter(Boolean).length} • Docs: {pb.documents.filter(Boolean).length}
+                        </p>
+                      </div>
+                      <div className="flex gap-2 text-xs">
+                        <button
+                          onClick={() => {
+                            setEditingPlaybookId(pb.id);
+                            setPlaybookDraft({
+                              name: pb.name,
+                              category: pb.category,
+                              conditions: pb.conditions || { payer: '', reasonCode: '', minAmount: '' },
+                              steps: pb.steps || [''],
+                              documents: pb.documents || [''],
+                              clinicalReviewRequired: pb.clinicalReviewRequired || false,
+                              appealAngle: pb.appealAngle || '',
+                              qualityFields: pb.qualityFields || [],
+                            });
+                          }}
+                          className="px-2 py-1 border rounded"
+                        >
+                          Editar
+                        </button>
+                        <button onClick={() => duplicatePlaybook(pb)} className="px-2 py-1 border rounded">
+                          Duplicar
+                        </button>
+                        <button onClick={() => versionPlaybook(pb)} className="px-2 py-1 border rounded">
+                          Versionar
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                  {!playbooks.length ? <p className="text-slate-400">Sin playbooks todavía.</p> : null}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {view === 'prevention' && (
+            <div className="space-y-2">
+              <div className="bg-white rounded p-2 border">
+                <h2 className="font-semibold">Prevención</h2>
+                <p className="text-slate-600 mt-1">
+                  Convertimos patrones de denials en acciones preventivas internas.
+                </p>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="bg-white rounded p-2 border">
+                  <p className="font-semibold">Top causas raíz (por $ en riesgo)</p>
+                  <ol className="mt-2 text-xs text-slate-600 list-decimal list-inside">
+                    {buildPreventionSuggestions().map((item) => (
+                      <li key={item.code}>
+                        {item.code} • ${Math.round(item.total).toLocaleString()}
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+                <div className="bg-white rounded p-2 border">
+                  <p className="font-semibold">Top pagadores</p>
+                  <ol className="mt-2 text-xs text-slate-600 list-decimal list-inside">
+                    {Object.entries(
+                      claims.reduce((acc, c) => {
+                        acc[c.payer] = (acc[c.payer] || 0) + c.amount;
+                        return acc;
+                      }, {})
+                    )
+                      .map(([payer, total]) => ({ payer, total }))
+                      .sort((a, b) => b.total - a.total)
+                      .slice(0, 5)
+                      .map((item) => (
+                        <li key={item.payer}>
+                          {item.payer} • ${Math.round(item.total).toLocaleString()}
+                        </li>
+                      ))}
+                  </ol>
+                </div>
+              </div>
+              <div className="bg-white rounded p-2 border">
+                <div className="flex justify-between items-center">
+                  <p className="font-semibold">Issues de prevención</p>
+                  <button
+                    onClick={() => {
+                      const suggestion = buildPreventionSuggestions()[0];
+                      if (!suggestion) return;
+                      createPreventionIssue({
+                        title: `Reducir ${suggestion.code}`,
+                        rootCauseCategory: suggestion.code,
+                        payersAffected: [suggestion.payer],
+                        reasonCodes: [suggestion.code],
+                        impactEstimate: suggestion.total,
+                        ownerRole: 'coding',
+                        recommendation:
+                          'Actualizar checklist interno y capacitar al equipo. Revisar elegibilidad antes de enviar.',
+                        trend: 'up',
+                      });
+                    }}
+                    className="px-2 py-1 bg-emerald-600 text-white rounded text-xs"
+                  >
+                    Crear issue sugerido
+                  </button>
+                </div>
+                <div className="mt-2 space-y-2">
+                  {preventionIssues.map((issue) => (
+                    <div key={issue.id} className="p-2 bg-slate-50 rounded border">
+                      <div className="flex justify-between">
+                        <div>
+                          <p className="font-medium">{issue.title}</p>
+                          <p className="text-xs text-slate-500">
+                            {issue.rootCauseCategory} • {issue.status} • ${Math.round(issue.impactEstimate || 0).toLocaleString()}
+                          </p>
+                          <p className="text-xs text-slate-400">Owner: {issue.ownerRole}</p>
+                        </div>
+                        <div className="text-xs text-slate-500">Tendencia: {issue.trend || 'flat'}</div>
+                      </div>
+                      <p className="text-xs text-slate-600 mt-1">{issue.recommendation}</p>
+                    </div>
+                  ))}
+                  {!preventionIssues.length ? <p className="text-slate-400">Sin issues todavía.</p> : null}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {view === 'program' && (
+            <div className="space-y-2">
+              <div className="bg-white rounded p-2 border flex items-center justify-between">
+                <div>
+                  <h2 className="font-semibold">Programa</h2>
+                  <p className="text-slate-600 mt-1">Resumen ejecutivo del backlog y acciones.</p>
+                </div>
+                <button
+                  onClick={() => {
+                    const summary = `Resumen semanal:
+- Volumen: ${programMetrics.backlog} denials activos.
+- Impacto estimado: $${Math.round(programMetrics.riskAmount).toLocaleString()} en riesgo.
+- Top causas: ${programMetrics.topCauseEntries.map((c) => c.key).join(', ') || 'n/a'}.
+- Acciones: ${programMetrics.topPlaybooks.map((p) => p.name).join(', ') || 'sin playbooks aplicados'}.
+- Prevención: ${programMetrics.topIssues.map((i) => i.title).join(', ') || 'sin issues nuevos'}.
+Próximos pasos: reforzar playbooks y cerrar tareas abiertas para prevenir recurrencia.`;
+                    setProgramSummary(summary);
+                    logAudit({
+                      action: 'Sistema generó resumen semanal',
+                      claimId: 'PROGRAM',
+                      detail: 'Resumen listo para compartir',
+                      source: 'system',
+                    });
+                  }}
+                  className="px-3 py-1 bg-emerald-600 text-white rounded"
+                >
+                  Generar resumen semanal
+                </button>
+              </div>
+              <div className="grid grid-cols-4 gap-2">
+                {[
+                  ['Backlog total', programMetrics.backlog],
+                  ['$ en riesgo', `$${Math.round(programMetrics.riskAmount).toLocaleString()}`],
+                  ['Tiempo promedio en cola (días)', programMetrics.avgQueueDays],
+                  ['New', programMetrics.stageCounts.new],
+                  ['In progress', programMetrics.stageCounts.in_progress],
+                  ['Appeal pending', programMetrics.stageCounts.appeal_pending],
+                  ['Resolved', programMetrics.stageCounts.resolved],
+                ].map(([label, value]) => (
+                  <div key={label} className="bg-white rounded p-2 border">
+                    <p className="text-slate-500">{label}</p>
+                    <p className="text-lg font-bold">{value}</p>
+                  </div>
+                ))}
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                <div className="bg-white rounded p-2 border">
+                  <p className="font-semibold">Top causas raíz</p>
+                  <ul className="mt-2 text-xs text-slate-600 list-disc list-inside">
+                    {programMetrics.topCauseEntries.map((entry) => (
+                      <li key={entry.key}>
+                        {entry.key} • ${Math.round(entry.total).toLocaleString()}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+                <div className="bg-white rounded p-2 border">
+                  <p className="font-semibold">Top playbooks usados</p>
+                  <ul className="mt-2 text-xs text-slate-600 list-disc list-inside">
+                    {programMetrics.topPlaybooks.map((entry) => (
+                      <li key={entry.id}>
+                        {entry.name} • {entry.count}
+                      </li>
+                    ))}
+                    {!programMetrics.topPlaybooks.length ? <li>Sin uso todavía</li> : null}
+                  </ul>
+                </div>
+                <div className="bg-white rounded p-2 border">
+                  <p className="font-semibold">Top issues de prevención</p>
+                  <ul className="mt-2 text-xs text-slate-600 list-disc list-inside">
+                    {programMetrics.topIssues.map((entry) => (
+                      <li key={entry.id}>
+                        {entry.title} • ${Math.round(entry.impact).toLocaleString()}
+                      </li>
+                    ))}
+                    {!programMetrics.topIssues.length ? <li>Sin issues todavía</li> : null}
+                  </ul>
+                </div>
+              </div>
+              {programSummary ? (
+                <div className="bg-white rounded p-2 border">
+                  <p className="font-semibold">Resumen semanal</p>
+                  <textarea value={programSummary} readOnly className="w-full h-24 border rounded p-2 text-xs mt-2" />
+                </div>
+              ) : null}
             </div>
           )}
 
@@ -2657,6 +3305,161 @@ Paciente: ${patientName}
                         ) : (
                           <p className="text-slate-400">Sin tareas aún.</p>
                         )}
+                      </div>
+                    </div>
+                    <div className="p-2 bg-white border rounded">
+                      <div className="flex justify-between items-center">
+                        <span className="font-semibold">Aplicar playbook</span>
+                        <div className="flex gap-2">
+                          <select
+                            value={selectedPlaybookId || playbooks[0]?.id || ''}
+                            onChange={(e) => setSelectedPlaybookId(e.target.value)}
+                            className="border rounded px-1 text-xs"
+                            disabled={!playbooks.length}
+                          >
+                            {playbooks.length ? (
+                              playbooks.map((pb) => (
+                                <option key={pb.id} value={pb.id}>
+                                  {pb.name} v{pb.version}
+                                </option>
+                              ))
+                            ) : (
+                              <option value="">Sin playbooks</option>
+                            )}
+                          </select>
+                          <button
+                            onClick={() => {
+                              const selected =
+                                playbooks.find((pb) => pb.id === (selectedPlaybookId || playbooks[0]?.id)) || playbooks[0];
+                              if (selected) applyPlaybookToClaim(selected, sel);
+                            }}
+                            className="px-2 py-0.5 bg-emerald-600 text-white rounded text-xs"
+                            disabled={!playbooks.length}
+                          >
+                            Aplicar
+                          </button>
+                        </div>
+                      </div>
+                      <p className="text-xs text-slate-500 mt-1">
+                        Aplica pasos y checklist del playbook al denial actual.
+                      </p>
+                    </div>
+                    <div className="p-2 bg-white border rounded">
+                      <div className="flex justify-between items-center">
+                        <span className="font-semibold">Vincular a prevención</span>
+                        <div className="flex gap-2">
+                          <select
+                            value={selectedIssueId}
+                            onChange={(e) => setSelectedIssueId(e.target.value)}
+                            className="border rounded px-1 text-xs"
+                          >
+                            <option value="">Selecciona issue</option>
+                            {preventionIssues.map((issue) => (
+                              <option key={issue.id} value={issue.id}>
+                                {issue.title}
+                              </option>
+                            ))}
+                          </select>
+                          <button
+                            onClick={() => {
+                              const issue = preventionIssues.find((item) => item.id === selectedIssueId);
+                              if (issue) linkIssueToClaim(issue.id, sel);
+                            }}
+                            className="px-2 py-0.5 border rounded text-xs"
+                          >
+                            Vincular
+                          </button>
+                          <button
+                            onClick={() => {
+                              const newIssue = createPreventionIssue({
+                                title: `Prevenir ${sel.code || 'denial'} ${sel.id}`,
+                                rootCauseCategory: sel.root_cause_bucket || sel.code || 'unknown',
+                                payersAffected: [sel.payer],
+                                reasonCodes: [sel.code || 'unknown'],
+                                impactEstimate: sel.amount || 0,
+                                ownerRole: 'coding',
+                                recommendation: 'Revisar proceso interno y actualizar checklist del equipo.',
+                                trend: 'up',
+                              });
+                              linkIssueToClaim(newIssue.id, sel);
+                            }}
+                            className="px-2 py-0.5 bg-emerald-600 text-white rounded text-xs"
+                          >
+                            Crear issue
+                          </button>
+                        </div>
+                      </div>
+                      <p className="text-xs text-slate-500 mt-1">
+                        Vincula el denial a un issue preventivo para evitar recurrencias.
+                      </p>
+                    </div>
+                    <div className="p-2 bg-white border rounded">
+                      <p className="font-semibold">Causa raíz y calidad</p>
+                      <div className="grid grid-cols-2 gap-2 mt-2 text-xs">
+                        <label className="text-slate-600">
+                          Categoría normalizada
+                          <select
+                            value={sel.denial_category_normalized || 'unknown'}
+                            onChange={(e) =>
+                              updateClaimFields(sel.id, { denial_category_normalized: e.target.value }, 'Categoría actualizada')
+                            }
+                            className="w-full border rounded p-1 mt-1"
+                          >
+                            {PLAYBOOK_CATEGORIES.map((cat) => (
+                              <option key={cat} value={cat}>
+                                {cat}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="text-slate-600">
+                          Root cause bucket
+                          <input
+                            value={sel.root_cause_bucket || ''}
+                            onChange={(e) =>
+                              updateClaimFields(sel.id, { root_cause_bucket: e.target.value || 'unknown' }, 'Root cause actualizado')
+                            }
+                            placeholder="unknown"
+                            className="w-full border rounded p-1 mt-1"
+                          />
+                        </label>
+                        <label className="text-slate-600">
+                          Revisión clínica
+                          <select
+                            value={sel.clinical_review_required ? 'yes' : 'no'}
+                            onChange={(e) =>
+                              updateClaimFields(
+                                sel.id,
+                                { clinical_review_required: e.target.value === 'yes' },
+                                'Revisión clínica actualizada'
+                              )
+                            }
+                            className="w-full border rounded p-1 mt-1"
+                          >
+                            <option value="no">No</option>
+                            <option value="yes">Sí</option>
+                          </select>
+                        </label>
+                        <div className="text-slate-600">
+                          Campos de calidad faltantes
+                          <div className="mt-1 flex flex-wrap gap-2">
+                            {QUALITY_GAP_FLAGS.map((flag) => (
+                              <label key={flag} className="flex items-center gap-1">
+                                <input
+                                  type="checkbox"
+                                  checked={(sel.quality_gap_flags || []).includes(flag)}
+                                  onChange={(e) => {
+                                    const nextFlags = e.target.checked
+                                      ? [...(sel.quality_gap_flags || []), flag]
+                                      : (sel.quality_gap_flags || []).filter((item) => item !== flag);
+                                    updateClaimFields(sel.id, { quality_gap_flags: nextFlags }, 'Checklist de calidad actualizado');
+                                  }}
+                                />
+                                {flag}
+                              </label>
+                            ))}
+                          </div>
+                        </div>
                       </div>
                     </div>
                     <div className="p-1.5 bg-slate-50 rounded">
