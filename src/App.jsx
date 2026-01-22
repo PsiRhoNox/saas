@@ -1111,8 +1111,8 @@ export default function App() {
           errors.push({ line: index + 1, message: 'CLP sin identificador de claim' });
         }
         currentClaim = {
-          payerClaimNumber: parts[1] || '',
-          patientControlNumber: parts[7] || '',
+          patientControlNumber: parts[1] || '',
+          payerClaimNumber: parts[7] || '',
           trackingNumber: '',
           charged: Number(parts[3] || 0),
           paid: Number(parts[4] || 0),
