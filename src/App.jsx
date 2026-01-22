@@ -180,8 +180,14 @@ const hydrateClaims = (claims, date, rules) =>
   claims.map((c) => ({
     ...c,
     appeals: c.appeals || [],
+    patientMasked: c.patientMasked || maskName(c.patient),
     ...score(c, date, rules),
   }));
+
+const initClaimsById = initClaims.reduce((acc, claim) => {
+  acc[claim.id] = claim;
+  return acc;
+}, {});
 
 const maskName = (name) => {
   if (!name) return '';
@@ -190,10 +196,6 @@ const maskName = (name) => {
   return `${first[0]}***${maskedRest ? ` ${maskedRest}` : ''}`;
 };
 
-const maskClaimPhi = (claim) => ({
-  ...claim,
-  patient: maskName(claim.patient),
-});
 
 const getStoredState = () => {
   if (typeof window === 'undefined') return null;
@@ -285,7 +287,12 @@ export default function App() {
       setStats(stored.stats || { proc: 0, app: 0 });
       setDemoMode(stored.demoMode ?? true);
       if (stored.date) setDate(new Date(stored.date));
-      const seeded = hydrateClaims(stored.claims || initClaims, stored.date || date, stored.rules || defaultRules);
+      const restoredClaims = (stored.claims || initClaims).map((claim) => ({
+        ...claim,
+        patient: initClaimsById[claim.id]?.patient || claim.patient,
+        patientMasked: claim.patientMasked || maskName(initClaimsById[claim.id]?.patient || claim.patient),
+      }));
+      const seeded = hydrateClaims(restoredClaims, stored.date || date, stored.rules || defaultRules);
       setClaims(seeded);
       setAudit(
         stored.audit || [
@@ -325,7 +332,11 @@ export default function App() {
 
   useEffect(() => {
     if (!claims.length) return;
-    const claimsForStorage = demoMode ? claims.map(maskClaimPhi) : claims;
+    const claimsForStorage = claims.map((claim) => ({
+      ...claim,
+      patient: claim.patientMasked || maskName(claim.patient),
+      patientMasked: claim.patientMasked || maskName(claim.patient),
+    }));
     persistState({
       version: STORAGE_VERSION,
       claims: claimsForStorage,
@@ -414,7 +425,7 @@ export default function App() {
     const apiUrl = import.meta.env.VITE_APPEAL_API_URL;
     const publicToken = import.meta.env.VITE_APPEAL_PUBLIC_TOKEN;
     const startedAt = performance.now();
-    const patientName = demoMode ? maskName(claim.patient) : claim.patient;
+    const patientName = demoMode ? claim.patientMasked || maskName(claim.patient) : claim.patient;
     if (!apiUrl || !publicToken) {
       const fallbackText = `APELACIÓN ${claim.id}
 Para: ${claim.payer}
@@ -527,15 +538,16 @@ Paciente: ${patientName}
     });
   };
 
-  const filtered = claims
+    const filtered = claims
     .filter(
       (c) =>
-        (c.patient.toLowerCase().includes(search.toLowerCase()) || c.id.toLowerCase().includes(search.toLowerCase())) &&
+        ((demoMode ? (c.patientMasked || '').toLowerCase() : c.patient.toLowerCase()).includes(search.toLowerCase()) ||
+          c.id.toLowerCase().includes(search.toLowerCase())) &&
         (filter === 'all' || c.status === filter)
     )
     .sort((a, b) => b.prio - a.prio);
 
-  const displayName = (claim) => (demoMode ? maskName(claim.patient) : claim.patient);
+  const displayName = (claim) => (demoMode ? claim.patientMasked || maskName(claim.patient) : claim.patient);
 
   const resetStorage = () => {
     if (typeof window !== 'undefined') {

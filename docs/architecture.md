@@ -44,6 +44,7 @@
 - `claims` guarda el estado financiero/operativo del claim (status + substatus).
 - `denials` es una entidad separada para cada evento de denegación.
 - `payments` es la entidad de pago, referenciada por claim.
+- `claim_events` registra transiciones de workflow con validación centralizada.
 - Todas las tablas multi-tenant incluyen `tenant_id` y están cubiertas por RLS.
 - `claims` mantiene punteros al último denial y pago para lectura rápida.
 
@@ -211,6 +212,7 @@ CREATE TABLE audit_log (
   ai_inputs JSONB,
   ai_confidence DECIMAL(5,2),
   ai_explanation TEXT,
+  ai_payload_hash VARCHAR(64),
 
   user_id UUID,
   user_role VARCHAR(50),
@@ -221,12 +223,24 @@ CREATE TABLE audit_log (
   created_at TIMESTAMP DEFAULT NOW() NOT NULL
 );
 
+-- Claim Events (workflow append-only)
+CREATE TABLE claim_events (
+  id BIGSERIAL PRIMARY KEY,
+  tenant_id UUID NOT NULL,
+  claim_id UUID REFERENCES claims(id) NOT NULL,
+  event_type VARCHAR(50) NOT NULL,
+  actor_type VARCHAR(20) NOT NULL, -- user, system, api
+  actor_id UUID,
+  event_payload JSONB,
+  created_at TIMESTAMP DEFAULT NOW() NOT NULL
+);
+
 CREATE INDEX idx_audit_entity ON audit_log(entity_type, entity_id);
 CREATE INDEX idx_audit_user ON audit_log(user_id, created_at DESC);
 CREATE INDEX idx_audit_tenant_date ON audit_log(tenant_id, created_at DESC);
 ```
 
-**Nota operativa:** la actualización de `last_denial_id` y `last_payment_id` debe estar centralizada en el servicio de ingestión (277CA/835) para evitar inconsistencias.
+**Nota operativa:** la actualización de `last_denial_id` y `last_payment_id` debe estar centralizada en el servicio de ingestión (277CA/835) para evitar inconsistencias. El workflow debe validar transiciones usando `claim_events`.
 
 ### 2.3 Versionado de payer_rules (no solapamiento)
 
@@ -543,6 +557,8 @@ interface AppealGenerationResult {
 }
 ```
 
+**Nota:** La generación de apelaciones debe ocurrir server-side (backend). El cliente envía un `denialId` y el backend aplica minimización/redacción, calcula hash de payload y llama al proveedor de IA bajo BAA. El audit guarda metadatos + hash, no texto completo.
+
 ---
 
 ## 7. Reconciliación de Pagos
@@ -690,6 +706,13 @@ CREATE POLICY tenant_isolation_audit ON audit_log
 
 **Nota:** En ambientes con connection pooling, el `tenant_id` debe setearse dentro de una transacción por request para evitar leakage.
 
+```sql
+BEGIN;
+SET LOCAL app.tenant_id = 'tenant-uuid-here';
+-- queries
+COMMIT;
+```
+
 ### 9.1 Tablas relacionadas con RLS
 Todas las tablas referenciadas deben incluir `tenant_id` + policy RLS: `patients`, `payers`, `providers`, `facilities`, `users`, `edi_files`, `templates`, `documents`.
 
@@ -712,12 +735,22 @@ ALTER TABLE documents ENABLE ROW LEVEL SECURITY;
 CREATE INDEX idx_claims_tenant_status ON claims(tenant_id, status);
 CREATE INDEX idx_denials_tenant_resolution ON denials(tenant_id, resolution_status);
 CREATE INDEX idx_denials_due_date ON denials(tenant_id, due_date);
+CREATE INDEX idx_denials_tenant_priority ON denials(tenant_id, resolution_status, due_date);
 CREATE INDEX idx_payments_tenant_date ON payments(tenant_id, payment_date);
 ```
 
+### 10.1 Particionamiento recomendado
+`audit_log` y `claims` deberían particionarse por fecha (mensual) para evitar degradación en retención y lectura histórica.
+
 ---
 
-## 11. Plan de Despliegue por Fases
+## 11. Observaciones de infraestructura
+- Para MVP, evaluar Postgres con GIN + trigramas antes de introducir OpenSearch.
+- Cuando se requiera búsqueda full-text a escala, OpenSearch es el servicio gestionado recomendado en AWS.
+
+---
+
+## 12. Plan de Despliegue por Fases
 
 ### Fase 1: MVP (Semanas 1-6)
 **Objetivo:** Demo vendible con 1 clearinghouse y 2 pagadores.
@@ -763,8 +796,9 @@ CREATE INDEX idx_payments_tenant_date ON payments(tenant_id, payment_date);
 
 ---
 
-## 12. Apéndice: Notas de Handoff
+## 13. Apéndice: Notas de Handoff
 - Mantener `claims.status` como fuente de verdad del workflow.
 - `denials` es histórico por evento; no duplicar estado del claim allí.
 - Las reglas por pagador deben versionarse para auditoría.
 - Toda acción que afecte scoring debe generar audit con before/after + inputs.
+- El frontend debe consumir el mismo contrato de `DenialDetailResponse` que expone el backend (aunque sea mock).
