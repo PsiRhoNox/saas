@@ -1,10 +1,14 @@
+import fs from 'node:fs/promises';
 import http from 'node:http';
 import crypto from 'node:crypto';
+import path from 'node:path';
 import { Pool } from 'pg';
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
 });
+
+const STORAGE_DIR = process.env.STORAGE_DIR || path.join(process.cwd(), 'storage');
 
 const json = (res, status, payload) => {
   res.writeHead(status, { 'Content-Type': 'application/json' });
@@ -27,6 +31,110 @@ const parseBody = async (req) =>
     });
   });
 
+const detectEdiType = (fileName, content) => {
+  const upper = `${fileName} ${content}`.toUpperCase();
+  if (fileName.toLowerCase().endsWith('.csv')) return 'CSV';
+  if (upper.includes('835') || upper.includes('BPR') || upper.includes('CLP')) return '835';
+  if (upper.includes('277') || upper.includes('STC')) return '277CA';
+  if (upper.includes('999')) return '999';
+  return 'unknown';
+};
+
+const checksumFor = (buffer) => crypto.createHash('sha256').update(buffer).digest('hex');
+
+const parse835 = (content) => {
+  const segments = content.replace(/\r/g, '').split('~').map((s) => s.trim()).filter(Boolean);
+  const rows = [];
+  const errors = [];
+  let currentClaim = null;
+  segments.forEach((segment, index) => {
+    const parts = segment.split('*');
+    const tag = parts[0];
+    if (tag === 'CLP') {
+      if (!parts[1]) {
+        errors.push({ line: index + 1, message: 'CLP sin identificador de claim' });
+      }
+      currentClaim = {
+        patientControlNumber: parts[1] || '',
+        payerClaimNumber: parts[7] || '',
+        trackingNumber: '',
+        charged: Number(parts[3] || 0),
+        paid: Number(parts[4] || 0),
+        patientResp: Number(parts[5] || 0),
+        adjustments: [],
+      };
+      rows.push(currentClaim);
+    }
+    if (tag === 'TRN' && parts[1] === '1' && currentClaim) {
+      currentClaim.trackingNumber = parts[2] || '';
+    }
+    if (tag === 'CAS' && currentClaim) {
+      const groupCode = parts[1];
+      for (let i = 2; i < parts.length; i += 3) {
+        const reasonCode = parts[i];
+        const amount = Number(parts[i + 1] || 0);
+        if (!reasonCode) continue;
+        currentClaim.adjustments.push({ groupCode, reasonCode, amount });
+      }
+    }
+  });
+  return { rows, errors };
+};
+
+const parse277 = (content) => {
+  const segments = content.replace(/\r/g, '').split('~').map((s) => s.trim()).filter(Boolean);
+  const rows = [];
+  const errors = [];
+  let trackingNumber = '';
+  let patientControlNumber = '';
+  segments.forEach((segment, index) => {
+    const parts = segment.split('*');
+    const tag = parts[0];
+    if (tag === 'TRN' && parts[1] === '1') {
+      trackingNumber = parts[2] || '';
+    }
+    if (tag === 'REF' && parts[1] === '1K') {
+      patientControlNumber = parts[2] || '';
+    }
+    if (tag === 'STC') {
+      const status = parts[1] || '';
+      if (!status) {
+        errors.push({ line: index + 1, message: 'STC sin status' });
+      }
+      rows.push({
+        status,
+        trackingNumber,
+        patientControlNumber,
+      });
+    }
+  });
+  return { rows, errors };
+};
+
+const parse999 = (content) => {
+  if (!content) return { rows: [], errors: [{ line: 1, message: '999 vacío' }] };
+  return { rows: [{ status: '999_ACK' }], errors: [] };
+};
+
+const parseCsv = (content) => {
+  const lines = content.replace(/\r/g, '').split('\n').filter((line) => line.trim().length);
+  const errors = [];
+  if (lines.length < 2) {
+    return { rows: [], errors: [{ line: 1, message: 'CSV sin filas de datos' }] };
+  }
+  const headers = lines[0].split(',').map((h) => h.trim());
+  const rows = [];
+  for (let i = 1; i < lines.length; i += 1) {
+    const cells = lines[i].split(',');
+    const row = {};
+    headers.forEach((header, idx) => {
+      row[header] = cells[idx] || '';
+    });
+    rows.push(row);
+  }
+  return { rows, errors };
+};
+
 const hashPassword = (password, salt = crypto.randomBytes(16).toString('hex')) => {
   const iterations = 120000;
   const hash = crypto.pbkdf2Sync(password, salt, iterations, 64, 'sha512').toString('hex');
@@ -40,6 +148,10 @@ const verifyPassword = (password, stored) => {
   return crypto.timingSafeEqual(Buffer.from(hash, 'hex'), Buffer.from(derived, 'hex'));
 };
 
+const ensureStorageDir = async () => {
+  await fs.mkdir(STORAGE_DIR, { recursive: true });
+};
+
 const createSession = async (client, user) => {
   const token = crypto.randomBytes(32).toString('hex');
   const expiresAt = new Date(Date.now() + 7 * 86400000).toISOString();
@@ -48,6 +160,73 @@ const createSession = async (client, user) => {
     [user.tenant_id, user.id, token, expiresAt]
   );
   return { token, expiresAt };
+};
+
+const upsertClaim = async (client, tenantId, identifiers, data) => {
+  const match = await client.query(
+    `SELECT * FROM claims
+     WHERE tenant_id = $1
+       AND (
+         (patient_control_number IS NOT NULL AND patient_control_number = $2) OR
+         (payer_claim_number IS NOT NULL AND payer_claim_number = $3) OR
+         (tracking_number IS NOT NULL AND tracking_number = $4) OR
+         (external_id IS NOT NULL AND external_id = $5)
+       )
+     LIMIT 1`,
+    [tenantId, identifiers.patientControlNumber || null, identifiers.payerClaimNumber || null, identifiers.trackingNumber || null, identifiers.externalId || null]
+  );
+  if (match.rowCount) {
+    const claim = match.rows[0];
+    const updated = await client.query(
+      `UPDATE claims
+       SET patient_control_number = COALESCE($1, patient_control_number),
+           payer_claim_number = COALESCE($2, payer_claim_number),
+           tracking_number = COALESCE($3, tracking_number),
+           amount = COALESCE($4, amount),
+           payer = COALESCE($5, payer),
+           denied_at = COALESCE($6, denied_at)
+       WHERE id = $7
+       RETURNING *`,
+      [
+        identifiers.patientControlNumber || null,
+        identifiers.payerClaimNumber || null,
+        identifiers.trackingNumber || null,
+        data.amount || null,
+        data.payer || null,
+        data.deniedAt || null,
+        claim.id,
+      ]
+    );
+    return { claim: updated.rows[0], matched: true };
+  }
+  const created = await client.query(
+    `INSERT INTO claims (tenant_id, external_id, patient_control_number, payer_claim_number, tracking_number, payer, amount, status, denied_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+     RETURNING *`,
+    [
+      tenantId,
+      identifiers.externalId || null,
+      identifiers.patientControlNumber || null,
+      identifiers.payerClaimNumber || null,
+      identifiers.trackingNumber || null,
+      data.payer || 'Unknown',
+      data.amount || 0,
+      'pending',
+      data.deniedAt || null,
+    ]
+  );
+  return { claim: created.rows[0], matched: false };
+};
+
+const recordEvent = async (client, tenantId, eventKey, entityType, entityId) => {
+  const result = await client.query(
+    `INSERT INTO ingest_events (tenant_id, event_key, entity_type, entity_id)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (tenant_id, event_key) DO NOTHING
+     RETURNING id`,
+    [tenantId, eventKey, entityType, entityId]
+  );
+  return result.rowCount > 0;
 };
 
 const withTenant = async (req, res, handler) => {
@@ -218,9 +397,10 @@ const routes = async (req, res) => {
 
   if (req.method === 'POST' && req.url === '/ingest_runs') {
     return withTenant(req, res, async (client, user) => {
+      const body = await parseBody(req);
       const { rows } = await client.query(
-        'INSERT INTO ingest_runs (tenant_id, status, created_by) VALUES ($1, $2, $3) RETURNING *',
-        [user.tenant_id, 'queued', user.id]
+        'INSERT INTO ingest_runs (tenant_id, status, created_by, correlation_id) VALUES ($1, $2, $3, $4) RETURNING *',
+        [user.tenant_id, 'queued', user.id, body.correlationId || crypto.randomUUID()]
       );
       await client.query(
         'INSERT INTO audit_log (tenant_id, action, entity_type, entity_id, detail, created_by) VALUES ($1, $2, $3, $4, $5, $6)',
@@ -234,15 +414,32 @@ const routes = async (req, res) => {
     const runId = req.url.split('/')[2];
     return withTenant(req, res, async (client, user) => {
       const body = await parseBody(req);
+      await ensureStorageDir();
+      const rawBuffer = Buffer.from(body.contentBase64 || '', 'base64');
+      const checksum = checksumFor(rawBuffer);
+      const detectedType = detectEdiType(body.fileName || 'upload', rawBuffer.toString('utf8'));
+      const storagePath = path.join(STORAGE_DIR, `${checksum}-${body.fileName || 'upload'}`);
+      const existing = await client.query(
+        'SELECT * FROM edi_files WHERE tenant_id = $1 AND checksum = $2',
+        [user.tenant_id, checksum]
+      );
+      if (existing.rowCount) {
+        json(res, 200, { file: existing.rows[0], deduped: true });
+        return;
+      }
+      await fs.writeFile(storagePath, rawBuffer);
       const { rows } = await client.query(
-        `INSERT INTO edi_files (tenant_id, ingest_run_id, file_name, file_type, status, counts, errors)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
+        `INSERT INTO edi_files (tenant_id, ingest_run_id, file_name, file_type, checksum, storage_path, detected_type, status, counts, errors)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
          RETURNING *`,
         [
           user.tenant_id,
           runId,
           body.fileName,
-          body.fileType,
+          body.fileType || detectedType,
+          checksum,
+          storagePath,
+          detectedType,
           body.status || 'queued',
           body.counts || {},
           body.errors || [],
@@ -253,6 +450,124 @@ const routes = async (req, res) => {
         [user.tenant_id, 'edi_file.created', 'edi_file', rows[0].id, body.fileName, user.id]
       );
       json(res, 201, { file: rows[0] });
+    });
+  }
+
+  if (req.method === 'POST' && req.url.startsWith('/ingest_runs/') && req.url.endsWith('/process')) {
+    const runId = req.url.split('/')[2];
+    return withTenant(req, res, async (client, user) => {
+      const files = await client.query(
+        'SELECT * FROM edi_files WHERE ingest_run_id = $1 ORDER BY created_at ASC',
+        [runId]
+      );
+      const runCounts = { files: files.rowCount, denials: 0, payments: 0, unmatched: 0 };
+      for (const file of files.rows) {
+        const content = await fs.readFile(file.storage_path, 'utf8');
+        const type = file.detected_type;
+        let rows = [];
+        let errors = [];
+        if (type === '835') ({ rows, errors } = parse835(content));
+        if (type === '277CA') ({ rows, errors } = parse277(content));
+        if (type === 'CSV') ({ rows, errors } = parseCsv(content));
+        if (type === '999') ({ rows, errors } = parse999(content));
+        const summary = { claims: rows.length, denials: 0, payments: 0, unmatched: 0 };
+        for (const row of rows) {
+          const identifiers = {
+            patientControlNumber: row.patientControlNumber || row.patient_control_number || row.patient_control || '',
+            payerClaimNumber: row.payerClaimNumber || row.payer_claim_number || row.claim_id || '',
+            trackingNumber: row.trackingNumber || row.tracking_number || '',
+            externalId: row.claimId || row.claim_id || '',
+          };
+          const result = await upsertClaim(client, user.tenant_id, identifiers, {
+            amount: row.charged || row.amount || 0,
+            payer: row.payer || 'Unknown',
+            deniedAt: new Date().toISOString().slice(0, 10),
+          });
+          if (!result.matched) {
+            summary.unmatched += 1;
+            runCounts.unmatched += 1;
+            await client.query(
+              `INSERT INTO unmatched_items (tenant_id, ingest_run_id, reason, payload)
+               VALUES ($1, $2, $3, $4)`,
+              [user.tenant_id, runId, 'Claim no encontrado en matching', { identifiers }]
+            );
+          }
+          if (type === '835') {
+            const denialAdjustments = row.adjustments?.filter((adj) => adj.amount > 0) || [];
+            const isDenied =
+              row.paid === 0 || denialAdjustments.some((adj) => ['CO', 'PR', 'PI', 'OA'].includes(adj.groupCode));
+            if (isDenied && denialAdjustments.length) {
+              const primary = denialAdjustments[0];
+              const eventKey = `${file.id}:${result.claim.id}:denial:${primary.groupCode}-${primary.reasonCode}`;
+              const created = await recordEvent(client, user.tenant_id, eventKey, 'denial', null);
+              if (created) {
+                await client.query(
+                  `INSERT INTO denials (tenant_id, claim_id, code, reason)
+                   VALUES ($1, $2, $3, $4)`,
+                  [user.tenant_id, result.claim.id, `${primary.groupCode}-${primary.reasonCode}`, `Ajuste ${primary.reasonCode}`]
+                );
+                summary.denials += 1;
+                runCounts.denials += 1;
+              }
+            }
+            if (row.paid > 0) {
+              const eventKey = `${file.id}:${result.claim.id}:payment:${row.paid}`;
+              const created = await recordEvent(client, user.tenant_id, eventKey, 'payment', null);
+              if (created) {
+                await client.query(
+                  `INSERT INTO payments (tenant_id, claim_id, amount, paid_at)
+                   VALUES ($1, $2, $3, $4)`,
+                  [user.tenant_id, result.claim.id, row.paid, new Date().toISOString().slice(0, 10)]
+                );
+                summary.payments += 1;
+                runCounts.payments += 1;
+              }
+            }
+          }
+          if (type === '277CA') {
+            const status = row.status || '';
+            if (status.startsWith('A1') || status.startsWith('A7') || status.startsWith('R') || status.startsWith('E')) {
+              const eventKey = `${file.id}:${result.claim.id}:denial:${status}`;
+              const created = await recordEvent(client, user.tenant_id, eventKey, 'denial', null);
+              if (created) {
+                await client.query(
+                  `INSERT INTO denials (tenant_id, claim_id, code, reason)
+                   VALUES ($1, $2, $3, $4)`,
+                  [user.tenant_id, result.claim.id, `277-${status.split(':')[0]}`, `Estatus ${status}`]
+                );
+                summary.denials += 1;
+                runCounts.denials += 1;
+              }
+            }
+          }
+          if (type === 'CSV' && row.denial_code) {
+            const eventKey = `${file.id}:${result.claim.id}:denial:${row.denial_code}`;
+            const created = await recordEvent(client, user.tenant_id, eventKey, 'denial', null);
+            if (created) {
+              await client.query(
+                `INSERT INTO denials (tenant_id, claim_id, code, reason)
+                 VALUES ($1, $2, $3, $4)`,
+                [user.tenant_id, result.claim.id, row.denial_code, row.denial_reason || 'CSV denial']
+              );
+              summary.denials += 1;
+              runCounts.denials += 1;
+            }
+          }
+        }
+        const status = errors.length ? 'error' : 'processed';
+        await client.query(
+          `UPDATE edi_files
+           SET status = $1, counts = $2, errors = $3, processed_at = now()
+           WHERE id = $4`,
+          [status, summary, errors, file.id]
+        );
+        await client.query(
+          'INSERT INTO audit_log (tenant_id, action, entity_type, entity_id, detail, created_by) VALUES ($1, $2, $3, $4, $5, $6)',
+          [user.tenant_id, 'edi_file.processed', 'edi_file', file.id, `${file.file_name} processed`, user.id]
+        );
+      }
+      await client.query('UPDATE ingest_runs SET status = $1 WHERE id = $2', ['completed', runId]);
+      json(res, 200, { runId, summary: runCounts });
     });
   }
 

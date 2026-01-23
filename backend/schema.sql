@@ -100,6 +100,7 @@ CREATE TABLE ingest_runs (
   tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
   status text NOT NULL DEFAULT 'queued',
   created_by uuid REFERENCES users(id),
+  correlation_id text NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
@@ -109,10 +110,27 @@ CREATE TABLE edi_files (
   ingest_run_id uuid NOT NULL REFERENCES ingest_runs(id) ON DELETE CASCADE,
   file_name text NOT NULL,
   file_type text NOT NULL,
+  checksum text NOT NULL,
+  storage_path text NOT NULL,
+  detected_type text NOT NULL,
   status text NOT NULL DEFAULT 'queued',
   counts jsonb NOT NULL DEFAULT '{}'::jsonb,
   errors jsonb NOT NULL DEFAULT '[]'::jsonb,
+  received_at timestamptz NOT NULL DEFAULT now(),
+  processed_at timestamptz,
   created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX edi_files_tenant_checksum_idx ON edi_files (tenant_id, checksum);
+
+CREATE TABLE ingest_events (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  event_key text NOT NULL,
+  entity_type text NOT NULL,
+  entity_id uuid,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (tenant_id, event_key)
 );
 
 CREATE TABLE unmatched_items (
@@ -163,6 +181,7 @@ ALTER TABLE documents ENABLE ROW LEVEL SECURITY;
 ALTER TABLE payer_rules ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ingest_runs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE edi_files ENABLE ROW LEVEL SECURITY;
+ALTER TABLE ingest_events ENABLE ROW LEVEL SECURITY;
 ALTER TABLE unmatched_items ENABLE ROW LEVEL SECURITY;
 ALTER TABLE audit_log ENABLE ROW LEVEL SECURITY;
 
@@ -176,5 +195,6 @@ CREATE POLICY tenant_isolation_documents ON documents USING (tenant_id = current
 CREATE POLICY tenant_isolation_payer_rules ON payer_rules USING (tenant_id = current_setting('app.tenant_id')::uuid);
 CREATE POLICY tenant_isolation_ingest_runs ON ingest_runs USING (tenant_id = current_setting('app.tenant_id')::uuid);
 CREATE POLICY tenant_isolation_edi_files ON edi_files USING (tenant_id = current_setting('app.tenant_id')::uuid);
+CREATE POLICY tenant_isolation_ingest_events ON ingest_events USING (tenant_id = current_setting('app.tenant_id')::uuid);
 CREATE POLICY tenant_isolation_unmatched ON unmatched_items USING (tenant_id = current_setting('app.tenant_id')::uuid);
 CREATE POLICY tenant_isolation_audit ON audit_log USING (tenant_id = current_setting('app.tenant_id')::uuid);
