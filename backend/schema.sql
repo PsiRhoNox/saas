@@ -145,6 +145,34 @@ CREATE TABLE claim_checklists (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
+CREATE TABLE sftp_integrations (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  name text NOT NULL,
+  host text NOT NULL,
+  username text NOT NULL,
+  private_key text NOT NULL,
+  remote_path text NOT NULL,
+  file_pattern text NOT NULL DEFAULT '*.txt',
+  timezone text NOT NULL DEFAULT 'UTC',
+  status text NOT NULL DEFAULT 'active',
+  last_pull_at timestamptz,
+  last_file_name text,
+  error_message text,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE sftp_poll_logs (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  integration_id uuid NOT NULL REFERENCES sftp_integrations(id) ON DELETE CASCADE,
+  status text NOT NULL,
+  files_fetched integer NOT NULL DEFAULT 0,
+  errors integer NOT NULL DEFAULT 0,
+  detail text,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
 CREATE TABLE payer_rules (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
@@ -246,6 +274,8 @@ ALTER TABLE playbooks ENABLE ROW LEVEL SECURITY;
 ALTER TABLE playbook_steps ENABLE ROW LEVEL SECURITY;
 ALTER TABLE playbook_checklists ENABLE ROW LEVEL SECURITY;
 ALTER TABLE claim_checklists ENABLE ROW LEVEL SECURITY;
+ALTER TABLE sftp_integrations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE sftp_poll_logs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ingest_runs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE edi_files ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ingest_events ENABLE ROW LEVEL SECURITY;
@@ -266,6 +296,8 @@ CREATE POLICY tenant_isolation_playbooks ON playbooks USING (tenant_id = current
 CREATE POLICY tenant_isolation_playbook_steps ON playbook_steps USING (playbook_id IN (SELECT id FROM playbooks WHERE tenant_id = current_setting('app.tenant_id')::uuid));
 CREATE POLICY tenant_isolation_playbook_checklists ON playbook_checklists USING (playbook_id IN (SELECT id FROM playbooks WHERE tenant_id = current_setting('app.tenant_id')::uuid));
 CREATE POLICY tenant_isolation_claim_checklists ON claim_checklists USING (tenant_id = current_setting('app.tenant_id')::uuid);
+CREATE POLICY tenant_isolation_sftp_integrations ON sftp_integrations USING (tenant_id = current_setting('app.tenant_id')::uuid);
+CREATE POLICY tenant_isolation_sftp_poll_logs ON sftp_poll_logs USING (tenant_id = current_setting('app.tenant_id')::uuid);
 CREATE POLICY tenant_isolation_ingest_runs ON ingest_runs USING (tenant_id = current_setting('app.tenant_id')::uuid);
 CREATE POLICY tenant_isolation_edi_files ON edi_files USING (tenant_id = current_setting('app.tenant_id')::uuid);
 CREATE POLICY tenant_isolation_ingest_events ON ingest_events USING (tenant_id = current_setting('app.tenant_id')::uuid);

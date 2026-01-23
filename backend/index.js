@@ -343,6 +343,41 @@ const routes = async (req, res) => {
     });
   }
 
+  if (req.method === 'GET' && req.url === '/sftp_integrations') {
+    return withTenant(req, res, async (client) => {
+      const { rows } = await client.query('SELECT * FROM sftp_integrations ORDER BY created_at DESC');
+      json(res, 200, { integrations: rows });
+    });
+  }
+
+  if (req.method === 'POST' && req.url === '/sftp_integrations') {
+    return withTenant(req, res, async (client, user) => {
+      const body = await parseBody(req);
+      const { rows } = await client.query(
+        `INSERT INTO sftp_integrations
+         (tenant_id, name, host, username, private_key, remote_path, file_pattern, timezone, status)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         RETURNING *`,
+        [
+          user.tenant_id,
+          body.name,
+          body.host,
+          body.username,
+          body.privateKey,
+          body.remotePath,
+          body.filePattern || '*.txt',
+          body.timezone || 'UTC',
+          'active',
+        ]
+      );
+      await client.query(
+        'INSERT INTO audit_log (tenant_id, action, entity_type, entity_id, detail, created_by) VALUES ($1, $2, $3, $4, $5, $6)',
+        [user.tenant_id, 'sftp_integration.created', 'sftp_integration', rows[0].id, rows[0].name, user.id]
+      );
+      json(res, 201, { integration: rows[0] });
+    });
+  }
+
   if (req.method === 'GET' && req.url === '/playbooks') {
     return withTenant(req, res, async (client) => {
       const { rows } = await client.query('SELECT * FROM playbooks ORDER BY created_at DESC');

@@ -39,6 +39,8 @@ apuntar a un storage compatible con S3.
 - `POST /tasks/:id/complete`
 - `POST /tasks/:id/escalate`
 - `GET /audit`
+- `GET /sftp_integrations`
+- `POST /sftp_integrations`
 - `GET /playbooks`
 - `POST /playbooks`
 - `POST /playbooks/:id/apply`
@@ -52,6 +54,15 @@ apuntar a un storage compatible con S3.
 ## Workflow operativo (Fase 4)
 El backend modela tareas, playbooks, drafts de apelación/resubmission, y estados de submission dentro del sistema. El envío
 real ocurre fuera de la plataforma: se registran evidencias (confirmación o archivo adjunto) sin prometer envío automático.
+
+## Integración SFTP (Fase 5)
+El poller de SFTP permite pasar de piloto a producción sin cambiar la operación diaria. Se configura por tenant con host,
+usuario, llave, carpeta, patrón y zona horaria. El worker crea `ingest_runs` + `edi_files` y reusa el pipeline de proceso.
+
+### Worker de polling
+```bash
+node backend/sftp_poller.js
+```
 
 ## Ingestión (manual)
 Ejemplo de carga:
