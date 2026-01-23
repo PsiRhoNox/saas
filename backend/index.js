@@ -3,6 +3,7 @@ import http from 'node:http';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import { Pool } from 'pg';
+import { detectEdiType, parse277, parse835, parse999, parseCsv } from './parsers.js';
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -31,109 +32,7 @@ const parseBody = async (req) =>
     });
   });
 
-const detectEdiType = (fileName, content) => {
-  const upper = `${fileName} ${content}`.toUpperCase();
-  if (fileName.toLowerCase().endsWith('.csv')) return 'CSV';
-  if (upper.includes('835') || upper.includes('BPR') || upper.includes('CLP')) return '835';
-  if (upper.includes('277') || upper.includes('STC')) return '277CA';
-  if (upper.includes('999')) return '999';
-  return 'unknown';
-};
-
 const checksumFor = (buffer) => crypto.createHash('sha256').update(buffer).digest('hex');
-
-const parse835 = (content) => {
-  const segments = content.replace(/\r/g, '').split('~').map((s) => s.trim()).filter(Boolean);
-  const rows = [];
-  const errors = [];
-  let currentClaim = null;
-  segments.forEach((segment, index) => {
-    const parts = segment.split('*');
-    const tag = parts[0];
-    if (tag === 'CLP') {
-      if (!parts[1]) {
-        errors.push({ line: index + 1, message: 'CLP sin identificador de claim' });
-      }
-      currentClaim = {
-        patientControlNumber: parts[1] || '',
-        payerClaimNumber: parts[7] || '',
-        trackingNumber: '',
-        charged: Number(parts[3] || 0),
-        paid: Number(parts[4] || 0),
-        patientResp: Number(parts[5] || 0),
-        adjustments: [],
-      };
-      rows.push(currentClaim);
-    }
-    if (tag === 'TRN' && parts[1] === '1' && currentClaim) {
-      currentClaim.trackingNumber = parts[2] || '';
-    }
-    if (tag === 'CAS' && currentClaim) {
-      const groupCode = parts[1];
-      for (let i = 2; i < parts.length; i += 3) {
-        const reasonCode = parts[i];
-        const amount = Number(parts[i + 1] || 0);
-        if (!reasonCode) continue;
-        currentClaim.adjustments.push({ groupCode, reasonCode, amount });
-      }
-    }
-  });
-  return { rows, errors };
-};
-
-const parse277 = (content) => {
-  const segments = content.replace(/\r/g, '').split('~').map((s) => s.trim()).filter(Boolean);
-  const rows = [];
-  const errors = [];
-  let trackingNumber = '';
-  let patientControlNumber = '';
-  segments.forEach((segment, index) => {
-    const parts = segment.split('*');
-    const tag = parts[0];
-    if (tag === 'TRN' && parts[1] === '1') {
-      trackingNumber = parts[2] || '';
-    }
-    if (tag === 'REF' && parts[1] === '1K') {
-      patientControlNumber = parts[2] || '';
-    }
-    if (tag === 'STC') {
-      const status = parts[1] || '';
-      if (!status) {
-        errors.push({ line: index + 1, message: 'STC sin status' });
-      }
-      rows.push({
-        status,
-        trackingNumber,
-        patientControlNumber,
-      });
-    }
-  });
-  return { rows, errors };
-};
-
-const parse999 = (content) => {
-  if (!content) return { rows: [], errors: [{ line: 1, message: '999 vacío' }] };
-  return { rows: [{ status: '999_ACK' }], errors: [] };
-};
-
-const parseCsv = (content) => {
-  const lines = content.replace(/\r/g, '').split('\n').filter((line) => line.trim().length);
-  const errors = [];
-  if (lines.length < 2) {
-    return { rows: [], errors: [{ line: 1, message: 'CSV sin filas de datos' }] };
-  }
-  const headers = lines[0].split(',').map((h) => h.trim());
-  const rows = [];
-  for (let i = 1; i < lines.length; i += 1) {
-    const cells = lines[i].split(',');
-    const row = {};
-    headers.forEach((header, idx) => {
-      row[header] = cells[idx] || '';
-    });
-    rows.push(row);
-  }
-  return { rows, errors };
-};
 
 const hashPassword = (password, salt = crypto.randomBytes(16).toString('hex')) => {
   const iterations = 120000;
@@ -162,21 +61,49 @@ const createSession = async (client, user) => {
   return { token, expiresAt };
 };
 
+const selectClaimMatch = async (client, tenantId, identifiers) => {
+  if (identifiers.patientControlNumber) {
+    const result = await client.query(
+      `SELECT * FROM claims
+       WHERE tenant_id = $1 AND patient_control_number = $2
+       LIMIT 1`,
+      [tenantId, identifiers.patientControlNumber]
+    );
+    if (result.rowCount) return result.rows[0];
+  }
+  if (identifiers.payerClaimNumber) {
+    const result = await client.query(
+      `SELECT * FROM claims
+       WHERE tenant_id = $1 AND payer_claim_number = $2
+       LIMIT 1`,
+      [tenantId, identifiers.payerClaimNumber]
+    );
+    if (result.rowCount) return result.rows[0];
+  }
+  if (identifiers.trackingNumber) {
+    const result = await client.query(
+      `SELECT * FROM claims
+       WHERE tenant_id = $1 AND tracking_number = $2
+       LIMIT 1`,
+      [tenantId, identifiers.trackingNumber]
+    );
+    if (result.rowCount) return result.rows[0];
+  }
+  if (identifiers.externalId) {
+    const result = await client.query(
+      `SELECT * FROM claims
+       WHERE tenant_id = $1 AND external_id = $2
+       LIMIT 1`,
+      [tenantId, identifiers.externalId]
+    );
+    if (result.rowCount) return result.rows[0];
+  }
+  return null;
+};
+
 const upsertClaim = async (client, tenantId, identifiers, data) => {
-  const match = await client.query(
-    `SELECT * FROM claims
-     WHERE tenant_id = $1
-       AND (
-         (patient_control_number IS NOT NULL AND patient_control_number = $2) OR
-         (payer_claim_number IS NOT NULL AND payer_claim_number = $3) OR
-         (tracking_number IS NOT NULL AND tracking_number = $4) OR
-         (external_id IS NOT NULL AND external_id = $5)
-       )
-     LIMIT 1`,
-    [tenantId, identifiers.patientControlNumber || null, identifiers.payerClaimNumber || null, identifiers.trackingNumber || null, identifiers.externalId || null]
-  );
-  if (match.rowCount) {
-    const claim = match.rows[0];
+  const match = await selectClaimMatch(client, tenantId, identifiers);
+  if (match) {
     const updated = await client.query(
       `UPDATE claims
        SET patient_control_number = COALESCE($1, patient_control_number),
@@ -194,7 +121,7 @@ const upsertClaim = async (client, tenantId, identifiers, data) => {
         data.amount || null,
         data.payer || null,
         data.deniedAt || null,
-        claim.id,
+        match.id,
       ]
     );
     return { claim: updated.rows[0], matched: true };
@@ -489,22 +416,37 @@ const routes = async (req, res) => {
             await client.query(
               `INSERT INTO unmatched_items (tenant_id, ingest_run_id, reason, payload)
                VALUES ($1, $2, $3, $4)`,
-              [user.tenant_id, runId, 'Claim no encontrado en matching', { identifiers }]
+              [
+                user.tenant_id,
+                runId,
+                'Claim no encontrado en matching',
+                {
+                  identifiers,
+                  detectedType: type,
+                  fileId: file.id,
+                },
+              ]
             );
           }
           if (type === '835') {
             const denialAdjustments = row.adjustments?.filter((adj) => adj.amount > 0) || [];
+            const nonPrAdjustments = denialAdjustments.filter((adj) => adj.groupCode !== 'PR');
             const isDenied =
-              row.paid === 0 || denialAdjustments.some((adj) => ['CO', 'PR', 'PI', 'OA'].includes(adj.groupCode));
-            if (isDenied && denialAdjustments.length) {
-              const primary = denialAdjustments[0];
+              row.paid === 0 || nonPrAdjustments.some((adj) => ['CO', 'PI', 'OA'].includes(adj.groupCode));
+            if (isDenied && nonPrAdjustments.length) {
+              const primary = nonPrAdjustments[0];
               const eventKey = `${file.id}:${result.claim.id}:denial:${primary.groupCode}-${primary.reasonCode}`;
               const created = await recordEvent(client, user.tenant_id, eventKey, 'denial', null);
               if (created) {
                 await client.query(
                   `INSERT INTO denials (tenant_id, claim_id, code, reason)
                    VALUES ($1, $2, $3, $4)`,
-                  [user.tenant_id, result.claim.id, `${primary.groupCode}-${primary.reasonCode}`, `Ajuste ${primary.reasonCode}`]
+                  [
+                    user.tenant_id,
+                    result.claim.id,
+                    `${primary.groupCode}-${primary.reasonCode}`,
+                    `Ajuste ${primary.reasonCode}`,
+                  ]
                 );
                 summary.denials += 1;
                 runCounts.denials += 1;
