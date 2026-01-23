@@ -69,8 +69,11 @@ CREATE TABLE tasks (
   status text NOT NULL CHECK (status IN ('open', 'in_progress', 'blocked', 'done')),
   owner_role text NOT NULL,
   owner_name text NOT NULL,
+  sla_days integer,
   due_date date,
   next_follow_up_at date,
+  escalated_at timestamptz,
+  escalation_reason text,
   created_at timestamptz NOT NULL DEFAULT now(),
   completed_at timestamptz
 );
@@ -81,6 +84,64 @@ CREATE TABLE documents (
   claim_id uuid NOT NULL REFERENCES claims(id) ON DELETE CASCADE,
   file_name text NOT NULL,
   storage_url text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE claim_documents (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  claim_id uuid NOT NULL REFERENCES claims(id) ON DELETE CASCADE,
+  doc_type text NOT NULL CHECK (doc_type IN ('appeal_draft', 'resubmission_draft')),
+  version integer NOT NULL,
+  title text NOT NULL,
+  content text NOT NULL,
+  created_by uuid REFERENCES users(id),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (tenant_id, claim_id, doc_type, version)
+);
+
+CREATE TABLE claim_submissions (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  claim_id uuid NOT NULL REFERENCES claims(id) ON DELETE CASCADE,
+  submission_type text NOT NULL CHECK (submission_type IN ('appeal', 'resubmission')),
+  status text NOT NULL CHECK (status IN ('draft', 'submitted', 'awaiting_response', 'resolved')),
+  evidence_reference text,
+  evidence_url text,
+  submitted_at timestamptz,
+  created_by uuid REFERENCES users(id),
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE playbooks (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  name text NOT NULL,
+  category text NOT NULL,
+  reason_code text,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE playbook_steps (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  playbook_id uuid NOT NULL REFERENCES playbooks(id) ON DELETE CASCADE,
+  step_order integer NOT NULL,
+  title text NOT NULL
+);
+
+CREATE TABLE playbook_checklists (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  playbook_id uuid NOT NULL REFERENCES playbooks(id) ON DELETE CASCADE,
+  item_order integer NOT NULL,
+  label text NOT NULL
+);
+
+CREATE TABLE claim_checklists (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  claim_id uuid NOT NULL REFERENCES claims(id) ON DELETE CASCADE,
+  label text NOT NULL,
+  status text NOT NULL CHECK (status IN ('open', 'done')),
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
@@ -178,7 +239,13 @@ ALTER TABLE denials ENABLE ROW LEVEL SECURITY;
 ALTER TABLE payments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tasks ENABLE ROW LEVEL SECURITY;
 ALTER TABLE documents ENABLE ROW LEVEL SECURITY;
+ALTER TABLE claim_documents ENABLE ROW LEVEL SECURITY;
+ALTER TABLE claim_submissions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE payer_rules ENABLE ROW LEVEL SECURITY;
+ALTER TABLE playbooks ENABLE ROW LEVEL SECURITY;
+ALTER TABLE playbook_steps ENABLE ROW LEVEL SECURITY;
+ALTER TABLE playbook_checklists ENABLE ROW LEVEL SECURITY;
+ALTER TABLE claim_checklists ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ingest_runs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE edi_files ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ingest_events ENABLE ROW LEVEL SECURITY;
@@ -192,7 +259,13 @@ CREATE POLICY tenant_isolation_denials ON denials USING (tenant_id = current_set
 CREATE POLICY tenant_isolation_payments ON payments USING (tenant_id = current_setting('app.tenant_id')::uuid);
 CREATE POLICY tenant_isolation_tasks ON tasks USING (tenant_id = current_setting('app.tenant_id')::uuid);
 CREATE POLICY tenant_isolation_documents ON documents USING (tenant_id = current_setting('app.tenant_id')::uuid);
+CREATE POLICY tenant_isolation_claim_documents ON claim_documents USING (tenant_id = current_setting('app.tenant_id')::uuid);
+CREATE POLICY tenant_isolation_claim_submissions ON claim_submissions USING (tenant_id = current_setting('app.tenant_id')::uuid);
 CREATE POLICY tenant_isolation_payer_rules ON payer_rules USING (tenant_id = current_setting('app.tenant_id')::uuid);
+CREATE POLICY tenant_isolation_playbooks ON playbooks USING (tenant_id = current_setting('app.tenant_id')::uuid);
+CREATE POLICY tenant_isolation_playbook_steps ON playbook_steps USING (playbook_id IN (SELECT id FROM playbooks WHERE tenant_id = current_setting('app.tenant_id')::uuid));
+CREATE POLICY tenant_isolation_playbook_checklists ON playbook_checklists USING (playbook_id IN (SELECT id FROM playbooks WHERE tenant_id = current_setting('app.tenant_id')::uuid));
+CREATE POLICY tenant_isolation_claim_checklists ON claim_checklists USING (tenant_id = current_setting('app.tenant_id')::uuid);
 CREATE POLICY tenant_isolation_ingest_runs ON ingest_runs USING (tenant_id = current_setting('app.tenant_id')::uuid);
 CREATE POLICY tenant_isolation_edi_files ON edi_files USING (tenant_id = current_setting('app.tenant_id')::uuid);
 CREATE POLICY tenant_isolation_ingest_events ON ingest_events USING (tenant_id = current_setting('app.tenant_id')::uuid);

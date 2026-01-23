@@ -37,10 +37,21 @@ apuntar a un storage compatible con S3.
 - `GET /tasks`
 - `POST /tasks`
 - `POST /tasks/:id/complete`
+- `POST /tasks/:id/escalate`
 - `GET /audit`
+- `GET /playbooks`
+- `POST /playbooks`
+- `POST /playbooks/:id/apply`
+- `POST /claims/:id/documents`
+- `POST /claims/:id/submission_status`
+- `GET /claims/:id/work_package`
 - `POST /ingest_runs`
 - `POST /ingest_runs/:id/files`
 - `POST /ingest_runs/:id/process`
+
+## Workflow operativo (Fase 4)
+El backend modela tareas, playbooks, drafts de apelación/resubmission, y estados de submission dentro del sistema. El envío
+real ocurre fuera de la plataforma: se registran evidencias (confirmación o archivo adjunto) sin prometer envío automático.
 
 ## Ingestión (manual)
 Ejemplo de carga:

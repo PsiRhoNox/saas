@@ -276,8 +276,8 @@ const routes = async (req, res) => {
     return withTenant(req, res, async (client, user) => {
       const body = await parseBody(req);
       const { rows } = await client.query(
-        `INSERT INTO tasks (tenant_id, claim_id, title, task_type, status, owner_role, owner_name, due_date, next_follow_up_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        `INSERT INTO tasks (tenant_id, claim_id, title, task_type, status, owner_role, owner_name, sla_days, due_date, next_follow_up_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
          RETURNING *`,
         [
           user.tenant_id,
@@ -287,6 +287,7 @@ const routes = async (req, res) => {
           body.status || 'open',
           body.ownerRole,
           body.ownerName,
+          body.slaDays || null,
           body.dueDate || null,
           body.nextFollowUpAt || null,
         ]
@@ -296,6 +297,26 @@ const routes = async (req, res) => {
         [user.tenant_id, 'task.created', 'task', rows[0].id, rows[0].title, user.id]
       );
       json(res, 201, { task: rows[0] });
+    });
+  }
+
+  if (req.method === 'POST' && req.url.startsWith('/tasks/') && req.url.endsWith('/escalate')) {
+    const taskId = req.url.split('/')[2];
+    return withTenant(req, res, async (client, user) => {
+      const body = await parseBody(req);
+      const { rows } = await client.query(
+        `UPDATE tasks
+         SET status = $1, escalated_at = now(), escalation_reason = $2, owner_role = $3
+         WHERE id = $4
+         RETURNING *`,
+        ['blocked', body.reason || 'Escalado', body.ownerRole || 'supervisor', taskId]
+      );
+      if (!rows.length) return json(res, 404, { error: 'not_found' });
+      await client.query(
+        'INSERT INTO audit_log (tenant_id, action, entity_type, entity_id, detail, created_by) VALUES ($1, $2, $3, $4, $5, $6)',
+        [user.tenant_id, 'task.escalated', 'task', taskId, rows[0].escalation_reason, user.id]
+      );
+      json(res, 200, { task: rows[0] });
     });
   }
 
@@ -319,6 +340,148 @@ const routes = async (req, res) => {
     return withTenant(req, res, async (client) => {
       const { rows } = await client.query('SELECT * FROM audit_log ORDER BY created_at DESC');
       json(res, 200, { audit: rows });
+    });
+  }
+
+  if (req.method === 'GET' && req.url === '/playbooks') {
+    return withTenant(req, res, async (client) => {
+      const { rows } = await client.query('SELECT * FROM playbooks ORDER BY created_at DESC');
+      json(res, 200, { playbooks: rows });
+    });
+  }
+
+  if (req.method === 'POST' && req.url === '/playbooks') {
+    return withTenant(req, res, async (client, user) => {
+      const body = await parseBody(req);
+      const { rows } = await client.query(
+        `INSERT INTO playbooks (tenant_id, name, category, reason_code)
+         VALUES ($1, $2, $3, $4)
+         RETURNING *`,
+        [user.tenant_id, body.name, body.category, body.reasonCode || null]
+      );
+      const playbook = rows[0];
+      const steps = body.steps || [];
+      const checklist = body.checklist || [];
+      for (let i = 0; i < steps.length; i += 1) {
+        await client.query(
+          'INSERT INTO playbook_steps (playbook_id, step_order, title) VALUES ($1, $2, $3)',
+          [playbook.id, i + 1, steps[i]]
+        );
+      }
+      for (let i = 0; i < checklist.length; i += 1) {
+        await client.query(
+          'INSERT INTO playbook_checklists (playbook_id, item_order, label) VALUES ($1, $2, $3)',
+          [playbook.id, i + 1, checklist[i]]
+        );
+      }
+      await client.query(
+        'INSERT INTO audit_log (tenant_id, action, entity_type, entity_id, detail, created_by) VALUES ($1, $2, $3, $4, $5, $6)',
+        [user.tenant_id, 'playbook.created', 'playbook', playbook.id, playbook.name, user.id]
+      );
+      json(res, 201, { playbook });
+    });
+  }
+
+  if (req.method === 'POST' && req.url.startsWith('/playbooks/') && req.url.endsWith('/apply')) {
+    const playbookId = req.url.split('/')[2];
+    return withTenant(req, res, async (client, user) => {
+      const body = await parseBody(req);
+      const steps = await client.query('SELECT * FROM playbook_steps WHERE playbook_id = $1 ORDER BY step_order ASC', [
+        playbookId,
+      ]);
+      const checklist = await client.query(
+        'SELECT * FROM playbook_checklists WHERE playbook_id = $1 ORDER BY item_order ASC',
+        [playbookId]
+      );
+      for (const step of steps.rows) {
+        await client.query(
+          `INSERT INTO tasks (tenant_id, claim_id, title, task_type, status, owner_role, owner_name, sla_days)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+          [user.tenant_id, body.claimId, step.title, 'playbook_step', 'open', body.ownerRole || 'arv_specialist', body.ownerName || 'Equipo', body.slaDays || null]
+        );
+      }
+      for (const item of checklist.rows) {
+        await client.query(
+          `INSERT INTO claim_checklists (tenant_id, claim_id, label, status)
+           VALUES ($1, $2, $3, $4)`,
+          [user.tenant_id, body.claimId, item.label, 'open']
+        );
+      }
+      await client.query(
+        'INSERT INTO audit_log (tenant_id, action, entity_type, entity_id, detail, created_by) VALUES ($1, $2, $3, $4, $5, $6)',
+        [user.tenant_id, 'playbook.applied', 'playbook', playbookId, `Claim ${body.claimId}`, user.id]
+      );
+      json(res, 200, { applied: true, steps: steps.rowCount, checklist: checklist.rowCount });
+    });
+  }
+
+  if (req.method === 'POST' && req.url.startsWith('/claims/') && req.url.endsWith('/documents')) {
+    const claimId = req.url.split('/')[2];
+    return withTenant(req, res, async (client, user) => {
+      const body = await parseBody(req);
+      const versionResult = await client.query(
+        `SELECT COALESCE(MAX(version), 0) AS version FROM claim_documents
+         WHERE tenant_id = $1 AND claim_id = $2 AND doc_type = $3`,
+        [user.tenant_id, claimId, body.docType]
+      );
+      const nextVersion = Number(versionResult.rows[0].version) + 1;
+      const { rows } = await client.query(
+        `INSERT INTO claim_documents (tenant_id, claim_id, doc_type, version, title, content, created_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         RETURNING *`,
+        [user.tenant_id, claimId, body.docType, nextVersion, body.title, body.content, user.id]
+      );
+      await client.query(
+        'INSERT INTO audit_log (tenant_id, action, entity_type, entity_id, detail, created_by) VALUES ($1, $2, $3, $4, $5, $6)',
+        [user.tenant_id, 'document.created', 'claim_document', rows[0].id, rows[0].title, user.id]
+      );
+      json(res, 201, { document: rows[0] });
+    });
+  }
+
+  if (req.method === 'POST' && req.url.startsWith('/claims/') && req.url.endsWith('/submission_status')) {
+    const claimId = req.url.split('/')[2];
+    return withTenant(req, res, async (client, user) => {
+      const body = await parseBody(req);
+      const { rows } = await client.query(
+        `INSERT INTO claim_submissions (tenant_id, claim_id, submission_type, status, evidence_reference, evidence_url, submitted_at, created_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         RETURNING *`,
+        [
+          user.tenant_id,
+          claimId,
+          body.submissionType,
+          body.status,
+          body.evidenceReference || null,
+          body.evidenceUrl || null,
+          body.submittedAt || null,
+          user.id,
+        ]
+      );
+      await client.query(
+        'INSERT INTO audit_log (tenant_id, action, entity_type, entity_id, detail, created_by) VALUES ($1, $2, $3, $4, $5, $6)',
+        [user.tenant_id, 'submission.status_updated', 'claim_submission', rows[0].id, rows[0].status, user.id]
+      );
+      json(res, 201, { submission: rows[0] });
+    });
+  }
+
+  if (req.method === 'GET' && req.url.startsWith('/claims/') && req.url.endsWith('/work_package')) {
+    const claimId = req.url.split('/')[2];
+    return withTenant(req, res, async (client) => {
+      const claim = await client.query('SELECT * FROM claims WHERE id = $1', [claimId]);
+      if (!claim.rowCount) return json(res, 404, { error: 'not_found' });
+      const denials = await client.query('SELECT * FROM denials WHERE claim_id = $1', [claimId]);
+      const tasks = await client.query('SELECT * FROM tasks WHERE claim_id = $1', [claimId]);
+      const checklist = await client.query('SELECT * FROM claim_checklists WHERE claim_id = $1', [claimId]);
+      const documents = await client.query('SELECT * FROM claim_documents WHERE claim_id = $1 ORDER BY created_at DESC', [claimId]);
+      json(res, 200, {
+        claim: claim.rows[0],
+        denials: denials.rows,
+        tasks: tasks.rows,
+        checklist: checklist.rows,
+        documents: documents.rows,
+      });
     });
   }
 
