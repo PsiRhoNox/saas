@@ -184,6 +184,42 @@ CREATE TABLE payer_rules (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
+CREATE TABLE contract_terms_lite (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  payer text NOT NULL,
+  expected_percent numeric(5, 2) NOT NULL,
+  effective_start date NOT NULL,
+  effective_end date NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE contract_term_overrides (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  payer text NOT NULL,
+  cpt_code text NOT NULL,
+  expected_percent numeric(5, 2) NOT NULL,
+  effective_start date NOT NULL,
+  effective_end date NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE underpayment_items (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  claim_id uuid NOT NULL REFERENCES claims(id) ON DELETE CASCADE,
+  payment_id uuid REFERENCES payments(id) ON DELETE SET NULL,
+  payer text NOT NULL,
+  expected_amount numeric(12, 2),
+  actual_paid_amount numeric(12, 2) NOT NULL,
+  variance_amount numeric(12, 2) NOT NULL,
+  cas_group_code text,
+  cas_reason_code text,
+  status text NOT NULL DEFAULT 'open',
+  detected_at timestamptz NOT NULL DEFAULT now()
+);
+
 CREATE TABLE ingest_runs (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
@@ -270,6 +306,9 @@ ALTER TABLE documents ENABLE ROW LEVEL SECURITY;
 ALTER TABLE claim_documents ENABLE ROW LEVEL SECURITY;
 ALTER TABLE claim_submissions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE payer_rules ENABLE ROW LEVEL SECURITY;
+ALTER TABLE contract_terms_lite ENABLE ROW LEVEL SECURITY;
+ALTER TABLE contract_term_overrides ENABLE ROW LEVEL SECURITY;
+ALTER TABLE underpayment_items ENABLE ROW LEVEL SECURITY;
 ALTER TABLE playbooks ENABLE ROW LEVEL SECURITY;
 ALTER TABLE playbook_steps ENABLE ROW LEVEL SECURITY;
 ALTER TABLE playbook_checklists ENABLE ROW LEVEL SECURITY;
@@ -292,6 +331,9 @@ CREATE POLICY tenant_isolation_documents ON documents USING (tenant_id = current
 CREATE POLICY tenant_isolation_claim_documents ON claim_documents USING (tenant_id = current_setting('app.tenant_id')::uuid);
 CREATE POLICY tenant_isolation_claim_submissions ON claim_submissions USING (tenant_id = current_setting('app.tenant_id')::uuid);
 CREATE POLICY tenant_isolation_payer_rules ON payer_rules USING (tenant_id = current_setting('app.tenant_id')::uuid);
+CREATE POLICY tenant_isolation_contract_terms ON contract_terms_lite USING (tenant_id = current_setting('app.tenant_id')::uuid);
+CREATE POLICY tenant_isolation_contract_overrides ON contract_term_overrides USING (tenant_id = current_setting('app.tenant_id')::uuid);
+CREATE POLICY tenant_isolation_underpayments ON underpayment_items USING (tenant_id = current_setting('app.tenant_id')::uuid);
 CREATE POLICY tenant_isolation_playbooks ON playbooks USING (tenant_id = current_setting('app.tenant_id')::uuid);
 CREATE POLICY tenant_isolation_playbook_steps ON playbook_steps USING (playbook_id IN (SELECT id FROM playbooks WHERE tenant_id = current_setting('app.tenant_id')::uuid));
 CREATE POLICY tenant_isolation_playbook_checklists ON playbook_checklists USING (playbook_id IN (SELECT id FROM playbooks WHERE tenant_id = current_setting('app.tenant_id')::uuid));

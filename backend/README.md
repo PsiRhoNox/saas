@@ -39,6 +39,13 @@ apuntar a un storage compatible con S3.
 - `POST /tasks/:id/complete`
 - `POST /tasks/:id/escalate`
 - `GET /audit`
+- `GET /underpayments`
+- `GET /contract_terms_lite`
+- `POST /contract_terms_lite`
+- `GET /contract_overrides`
+- `POST /contract_overrides`
+- `GET /insights`
+- `GET /queue?type=denials|underpayments`
 - `GET /sftp_integrations`
 - `POST /sftp_integrations`
 - `GET /playbooks`

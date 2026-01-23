@@ -265,6 +265,13 @@ const routes = async (req, res) => {
     });
   }
 
+  if (req.method === 'GET' && req.url === '/underpayments') {
+    return withTenant(req, res, async (client) => {
+      const { rows } = await client.query('SELECT * FROM underpayment_items ORDER BY detected_at DESC');
+      json(res, 200, { underpayments: rows });
+    });
+  }
+
   if (req.method === 'GET' && req.url === '/tasks') {
     return withTenant(req, res, async (client) => {
       const { rows } = await client.query('SELECT * FROM tasks ORDER BY created_at DESC');
@@ -340,6 +347,99 @@ const routes = async (req, res) => {
     return withTenant(req, res, async (client) => {
       const { rows } = await client.query('SELECT * FROM audit_log ORDER BY created_at DESC');
       json(res, 200, { audit: rows });
+    });
+  }
+
+  if (req.method === 'GET' && req.url === '/contract_terms_lite') {
+    return withTenant(req, res, async (client) => {
+      const { rows } = await client.query('SELECT * FROM contract_terms_lite ORDER BY created_at DESC');
+      json(res, 200, { terms: rows });
+    });
+  }
+
+  if (req.method === 'POST' && req.url === '/contract_terms_lite') {
+    return withTenant(req, res, async (client, user) => {
+      const body = await parseBody(req);
+      const { rows } = await client.query(
+        `INSERT INTO contract_terms_lite (tenant_id, payer, expected_percent, effective_start, effective_end)
+         VALUES ($1, $2, $3, $4, $5)
+         RETURNING *`,
+        [user.tenant_id, body.payer, body.expectedPercent, body.effectiveStart, body.effectiveEnd]
+      );
+      await client.query(
+        'INSERT INTO audit_log (tenant_id, action, entity_type, entity_id, detail, created_by) VALUES ($1, $2, $3, $4, $5, $6)',
+        [user.tenant_id, 'contract_term.created', 'contract_term', rows[0].id, rows[0].payer, user.id]
+      );
+      json(res, 201, { term: rows[0] });
+    });
+  }
+
+  if (req.method === 'GET' && req.url === '/contract_overrides') {
+    return withTenant(req, res, async (client) => {
+      const { rows } = await client.query('SELECT * FROM contract_term_overrides ORDER BY created_at DESC');
+      json(res, 200, { overrides: rows });
+    });
+  }
+
+  if (req.method === 'POST' && req.url === '/contract_overrides') {
+    return withTenant(req, res, async (client, user) => {
+      const body = await parseBody(req);
+      const { rows } = await client.query(
+        `INSERT INTO contract_term_overrides (tenant_id, payer, cpt_code, expected_percent, effective_start, effective_end)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         RETURNING *`,
+        [user.tenant_id, body.payer, body.cptCode, body.expectedPercent, body.effectiveStart, body.effectiveEnd]
+      );
+      await client.query(
+        'INSERT INTO audit_log (tenant_id, action, entity_type, entity_id, detail, created_by) VALUES ($1, $2, $3, $4, $5, $6)',
+        [user.tenant_id, 'contract_override.created', 'contract_override', rows[0].id, rows[0].cpt_code, user.id]
+      );
+      json(res, 201, { override: rows[0] });
+    });
+  }
+
+  if (req.method === 'GET' && req.url === '/insights') {
+    return withTenant(req, res, async (client) => {
+      const byPayer = await client.query(
+        `SELECT payer, SUM(amount) AS total_amount
+         FROM claims
+         GROUP BY payer
+         ORDER BY total_amount DESC
+         LIMIT 5`
+      );
+      const byReason = await client.query(
+        `SELECT code, COUNT(*) AS count
+         FROM denials
+         GROUP BY code
+         ORDER BY count DESC
+         LIMIT 5`
+      );
+      const byCpt = await client.query(
+        `SELECT cpt_code, COUNT(*) AS count
+         FROM contract_term_overrides
+         GROUP BY cpt_code
+         ORDER BY count DESC
+         LIMIT 5`
+      );
+      json(res, 200, {
+        payer: byPayer.rows,
+        reasonCodes: byReason.rows,
+        cpt: byCpt.rows,
+      });
+    });
+  }
+
+  if (req.method === 'GET' && req.url === '/queue') {
+    return withTenant(req, res, async (client) => {
+      const type = new URL(req.url, 'http://localhost').searchParams.get('type');
+      const claims = await client.query('SELECT * FROM claims ORDER BY created_at DESC');
+      const denials = await client.query('SELECT * FROM denials ORDER BY created_at DESC');
+      const underpayments = await client.query('SELECT * FROM underpayment_items ORDER BY detected_at DESC');
+      json(res, 200, {
+        claims: type && type !== 'denials' ? [] : claims.rows,
+        denials: type && type !== 'denials' ? [] : denials.rows,
+        underpayments: type && type !== 'underpayments' ? [] : underpayments.rows,
+      });
     });
   }
 
@@ -650,17 +750,64 @@ const routes = async (req, res) => {
                 runCounts.denials += 1;
               }
             }
+            let paymentId = null;
             if (row.paid > 0) {
               const eventKey = `${file.id}:${result.claim.id}:payment:${row.paid}`;
               const created = await recordEvent(client, user.tenant_id, eventKey, 'payment', null);
               if (created) {
-                await client.query(
+                const paymentResult = await client.query(
                   `INSERT INTO payments (tenant_id, claim_id, amount, paid_at)
-                   VALUES ($1, $2, $3, $4)`,
+                   VALUES ($1, $2, $3, $4)
+                   RETURNING *`,
                   [user.tenant_id, result.claim.id, row.paid, new Date().toISOString().slice(0, 10)]
                 );
+                paymentId = paymentResult.rows?.[0]?.id;
                 summary.payments += 1;
                 runCounts.payments += 1;
+              }
+            }
+            if (row.charged && row.paid !== undefined && nonPrAdjustments.length) {
+              const serviceDate = new Date().toISOString().slice(0, 10);
+              const override = await client.query(
+                `SELECT * FROM contract_term_overrides
+                 WHERE tenant_id = $1 AND payer = $2 AND cpt_code = $3
+                   AND $4 BETWEEN effective_start AND effective_end
+                 ORDER BY created_at DESC
+                 LIMIT 1`,
+                [user.tenant_id, result.claim.payer, row.cptCode || null, serviceDate]
+              );
+              const term = await client.query(
+                `SELECT * FROM contract_terms_lite
+                 WHERE tenant_id = $1 AND payer = $2 AND $3 BETWEEN effective_start AND effective_end
+                 ORDER BY created_at DESC
+                 LIMIT 1`,
+                [user.tenant_id, result.claim.payer, serviceDate]
+              );
+              const expectedPercent =
+                override.rows[0]?.expected_percent ?? term.rows[0]?.expected_percent ?? null;
+              const expectedAmount = expectedPercent ? (row.charged * expectedPercent) / 100 : null;
+              const variance = expectedAmount !== null ? expectedAmount - row.paid : row.charged - row.paid;
+              if (variance > 0) {
+                await client.query(
+                  `INSERT INTO underpayment_items
+                   (tenant_id, claim_id, payment_id, payer, expected_amount, actual_paid_amount, variance_amount, cas_group_code, cas_reason_code)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+                  [
+                    user.tenant_id,
+                    result.claim.id,
+                    paymentId,
+                    result.claim.payer,
+                    expectedAmount,
+                    row.paid,
+                    variance,
+                    nonPrAdjustments[0]?.groupCode || null,
+                    nonPrAdjustments[0]?.reasonCode || null,
+                  ]
+                );
+                await client.query(
+                  'INSERT INTO audit_log (tenant_id, action, entity_type, entity_id, detail, created_by) VALUES ($1, $2, $3, $4, $5, $6)',
+                  [user.tenant_id, 'underpayment.detected', 'underpayment', null, `Variance ${variance}`, user.id]
+                );
               }
             }
           }

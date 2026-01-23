@@ -17,6 +17,7 @@ const parse835 = (content) => {
         charged: Number(parts[3] || 0),
         paid: Number(parts[4] || 0),
         patientResp: Number(parts[5] || 0),
+        cptCode: '',
         adjustments: [],
       };
       rows.push(currentClaim);
@@ -32,6 +33,11 @@ const parse835 = (content) => {
         if (!reasonCode) continue;
         currentClaim.adjustments.push({ groupCode, reasonCode, amount });
       }
+    }
+    if (tag === 'SVC' && currentClaim) {
+      const composite = parts[1] || '';
+      const pieces = composite.split(':');
+      currentClaim.cptCode = pieces[1] || '';
     }
   });
   return { rows, errors };
