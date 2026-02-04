@@ -428,6 +428,7 @@ export default function App() {
   const [extrasOpen, setExtrasOpen] = useState(false);
   const [showExtrasPrompt, setShowExtrasPrompt] = useState(false);
   const [opsRoleFilter, setOpsRoleFilter] = useState('all');
+  const [denialTab, setDenialTab] = useState('summary');
   const [ingestionRuns, setIngestionRuns] = useState([]);
   const [pendingMappings, setPendingMappings] = useState({});
   const [mappingDrafts, setMappingDrafts] = useState({});
@@ -2307,6 +2308,14 @@ Paciente: ${patientName}
 
   const activeRun = ingestionRuns.find((run) => run.id === activeRunId) || ingestionRuns[0];
   const selectedUnderpayment = underpaymentScored.find((item) => item.id === selectedUnderpaymentId);
+  const latestRun = ingestionRuns[0];
+  const backlogCount = claims.filter((claim) => ['pending', 'in_progress'].includes(claim.status)).length;
+  const recentFilesCount = latestRun?.files?.length || 0;
+  const dataSourceLabel = integrations?.length
+    ? 'SFTP configurado (visual)'
+    : ingestionRuns.length
+      ? 'Carga manual'
+      : 'Sin fuente configurada';
   const viewTitles = {
     demo: 'Guion de demo',
     dashboard: 'Dashboard',
@@ -2329,7 +2338,20 @@ Paciente: ${patientName}
     insights: 'Insights',
     underpayments: 'Underpayments',
   };
+  const viewDescriptions = {
+    denials: 'Cola priorizada con acciones sugeridas y trazabilidad.',
+    intake: 'Entrada de archivos en modo demo para poblar la cola.',
+    audit: 'Registro operativo de todo lo que pasa.',
+    how: 'Puente entre los archivos reales y el flujo del desk.',
+    ops: 'Gestión diaria de tareas y SLAs.',
+    ops_queue: 'Tareas asignadas y seguimiento por rol.',
+    playbooks: 'Plantillas opcionales para estandarizar pasos.',
+    prevention: 'Patrones que se convierten en prevención.',
+    program: 'Vista ejecutiva de backlog e impacto.',
+    underpayments: 'Add-on opcional para estimar underpayments.',
+  };
   const headerTitle = viewTitles[view] || 'Detalle';
+  const headerDescription = viewDescriptions[view] || 'Vista del módulo seleccionado.';
 
   return (
     <div className="h-screen flex bg-slate-100 overflow-hidden text-xs">
@@ -2422,49 +2444,67 @@ Paciente: ${patientName}
       </div>
 
       <div className="flex-1 flex flex-col overflow-hidden">
-        <header className="h-8 bg-white border-b flex items-center justify-between px-2">
-          <span className="font-semibold">{headerTitle}</span>
-          <div className="flex items-center gap-2">
-            <span className="bg-slate-100 px-1.5 py-0.5 rounded flex items-center gap-1">
-              <Clock className="w-3 h-3" />
-              {date.toLocaleDateString()}
-              <button onClick={advanceDay} className="hover:bg-slate-200 rounded p-0.5">
-                <RefreshCw className="w-3 h-3" />
-              </button>
-            </span>
-            <button
-              id="quick-tour-btn"
-              onClick={runQuickTour}
-              className="px-2 py-0.5 rounded border bg-white hover:bg-slate-50 text-slate-600"
-            >
-              Recorrido rápido
-            </button>
-            <button
-              onClick={() => {
-                setTourStep(0);
-                setShowTour(true);
-              }}
-              className="px-2 py-0.5 rounded border bg-white hover:bg-slate-50 text-slate-600"
-            >
-              Tour
-            </button>
-            <div className="flex items-center gap-1 text-[10px] text-slate-500">
-              <span>Enmascarar nombres (demo)</span>
-              <button
-                onClick={() => setDemoMode((prev) => !prev)}
-                className={`px-1 rounded border ${demoMode ? 'bg-emerald-50 text-emerald-700' : 'bg-white text-slate-500'}`}
-              >
-                {demoMode ? 'ON' : 'OFF'}
-              </button>
-              <button onClick={resetStorage} className="px-1 rounded border hover:bg-slate-100">
-                Reset
-              </button>
+        <header className="bg-white border-b">
+          <div className="flex items-center justify-between px-3 py-2">
+            <div>
+              <p className="text-[10px] uppercase text-slate-400">Denials Zero Desk</p>
+              <h1 className="text-sm font-semibold">{headerTitle}</h1>
+              <p className="text-xs text-slate-500">{headerDescription}</p>
             </div>
-            <Bell className="w-3 h-3 text-slate-400" />
+            <div className="flex flex-wrap items-center gap-2 justify-end">
+              <span className="bg-slate-100 px-2 py-1 rounded flex items-center gap-1 text-xs">
+                <Clock className="w-3 h-3" />
+                {date.toLocaleDateString()}
+                <button onClick={advanceDay} className="hover:bg-slate-200 rounded p-0.5">
+                  <RefreshCw className="w-3 h-3" />
+                </button>
+              </span>
+              <button
+                id="quick-tour-btn"
+                onClick={runQuickTour}
+                className="px-2 py-1 rounded border bg-white hover:bg-slate-50 text-slate-600"
+              >
+                Recorrido rápido
+              </button>
+              <button
+                onClick={() => {
+                  setTourStep(0);
+                  setShowTour(true);
+                }}
+                className="px-2 py-1 rounded border bg-white hover:bg-slate-50 text-slate-600"
+              >
+                Tour
+              </button>
+              <div className="flex items-center gap-1 text-[10px] text-slate-500">
+                <span>Enmascarar nombres (demo)</span>
+                <button
+                  onClick={() => setDemoMode((prev) => !prev)}
+                  className={`px-1 rounded border ${demoMode ? 'bg-emerald-50 text-emerald-700' : 'bg-white text-slate-500'}`}
+                >
+                  {demoMode ? 'ON' : 'OFF'}
+                </button>
+                <button onClick={resetStorage} className="px-1 rounded border hover:bg-slate-100">
+                  Reset
+                </button>
+              </div>
+              <Bell className="w-3 h-3 text-slate-400" />
+            </div>
+          </div>
+          <div className="grid grid-cols-3 gap-2 px-3 pb-2 text-xs">
+            {[
+              ['Fuente de datos', dataSourceLabel],
+              ['Archivos procesados', recentFilesCount ? `${recentFilesCount} recientes` : 'Sin archivos'],
+              ['Backlog activo', `${backlogCount} denials`],
+            ].map(([label, value]) => (
+              <div key={label} className="bg-slate-50 rounded px-2 py-1 border border-slate-200">
+                <p className="text-[10px] uppercase text-slate-400">{label}</p>
+                <p className="font-semibold text-slate-700">{value}</p>
+              </div>
+            ))}
           </div>
         </header>
 
-        <main className="flex-1 overflow-auto p-2">
+        <main className="flex-1 overflow-auto p-3">
           {view === 'demo' && (
             <div className="space-y-2">
               <div className="bg-white rounded p-2 border flex items-center justify-between">
@@ -3655,6 +3695,7 @@ Próximos pasos: reforzar playbooks y cerrar tareas abiertas para prevenir recur
                         const top = [...claims].sort((a, b) => b.prio - a.prio)[0];
                         if (!top) return;
                         setSel(top);
+                        setDenialTab('summary');
                       }}
                       className="px-2 py-0.5 border rounded hover:bg-slate-100"
                     >
@@ -3713,6 +3754,7 @@ Próximos pasos: reforzar playbooks y cerrar tareas abiertas para prevenir recur
                       onClick={() => {
                         setSel(claim);
                         setSelectedUnderpaymentId(null);
+                        setDenialTab('summary');
                       }}
                       className={`p-1.5 border-b cursor-pointer hover:bg-slate-50 ${
                         selected ? 'bg-emerald-50 border-l-2 border-l-emerald-500' : ''
@@ -3751,336 +3793,385 @@ Próximos pasos: reforzar playbooks y cerrar tareas abiertas para prevenir recur
                       <X className="w-3 h-3" />
                     </button>
                   </div>
-                  <div className="flex-1 overflow-auto p-2 space-y-2" id="denial-detail">
-                    <div className="p-2 bg-slate-800 text-white rounded flex justify-between">
-                      <div>
-                        <p className="text-slate-400">Monto</p>
-                        <p className="text-lg font-bold">${sel.amount.toLocaleString()}</p>
-                      </div>
-                      <div className="text-right">
-                        <p className="text-slate-400">Prob</p>
-                        <p className="text-lg font-bold text-emerald-400">{sel.prob}%</p>
-                      </div>
-                    </div>
-                    <div className="grid grid-cols-2 gap-1">
-                      {[
-                        ['Paciente', displayName(sel)],
-                        ['Pagador', sel.payer],
-                        ['Proveedor', sel.provider],
-                        ['Facility', sel.facility],
-                        ['CPT', sel.cpt],
-                        ['Dx', sel.dx],
-                      ].map(([label, value]) => (
-                        <div key={label} className="p-1 bg-slate-50 rounded">
-                          <p className="text-slate-500">{label}</p>
-                          <p className="font-medium">{value}</p>
-                        </div>
-                      ))}
-                    </div>
-                    <div className="p-1.5 bg-red-50 border border-red-200 rounded">
-                      <p className="font-semibold text-red-700">{sel.code}</p>
-                      <p className="text-red-800">{sel.reason}</p>
-                    </div>
-                    <div className="p-1.5 bg-emerald-50 border border-emerald-200 rounded">
-                      <p className="font-semibold text-emerald-700">Acción AI</p>
-                      <p className="text-emerald-800">{sel.action}</p>
-                    </div>
-                    {triageResults[sel.id] ? (
-                      <div className="p-2 bg-white border rounded">
-                        <div className="flex justify-between items-center">
-                          <span className="font-semibold">Triage IA</span>
-                          <button
-                            onClick={() => applyTriage(sel.id)}
-                            className="px-2 py-0.5 bg-emerald-600 text-white rounded"
-                          >
-                            Aplicar sugerencias
-                          </button>
-                        </div>
-                        <p className="text-slate-600 mt-1">{triageResults[sel.id].suggested_action_short}</p>
-                        <ul className="text-slate-500 text-xs mt-1 list-disc list-inside">
-                          {triageResults[sel.id].suggested_action_steps.map((step) => (
-                            <li key={step}>{step}</li>
-                          ))}
-                        </ul>
-                        <p className="text-slate-400 text-xs mt-1">
-                          Docs sugeridos: {triageResults[sel.id].required_documents.join(', ')}
-                        </p>
-                        <p className="text-slate-400 text-xs mt-1">
-                          Recomendación de apelación: {triageResults[sel.id].appeal_recommended ? 'Sí' : 'No'} •{' '}
-                          {triageResults[sel.id].appeal_angle}
-                        </p>
-                      </div>
-                    ) : (
-                      <div className="p-2 bg-slate-50 border rounded text-slate-500 text-xs">
-                        Sin triage IA todavía. Sube un 277CA/835 en Data Intake para generar sugerencias.
-                      </div>
-                    )}
-                    <div className="p-2 bg-white border rounded">
-                      <div className="flex justify-between items-center">
-                        <span className="font-semibold">Work plan</span>
-                        <div className="flex gap-2">
-                          <select
-                            value={taskTypeDraft}
-                            onChange={(e) => setTaskTypeDraft(e.target.value)}
-                            className="border rounded px-1 text-xs"
-                          >
-                            {TASK_TYPES.map((type) => (
-                              <option key={type} value={type}>
-                                {TASK_LABELS[type]}
-                              </option>
-                            ))}
-                          </select>
-                          <button
-                            onClick={() => createTaskForDenial(sel, taskTypeDraft, 'user')}
-                            className="px-2 py-0.5 border rounded text-xs"
-                          >
-                            Crear tarea
-                          </button>
-                          <button
-                            onClick={() => applySuggestedTasks(sel)}
-                            className="px-2 py-0.5 bg-emerald-600 text-white rounded text-xs"
-                          >
-                            Aplicar sugerencia
-                          </button>
-                        </div>
-                      </div>
-                      <div className="mt-2 space-y-1 text-xs">
-                        {tasks.filter((t) => t.claimId === sel.id).length ? (
-                          tasks
-                            .filter((t) => t.claimId === sel.id)
-                            .map((t) => (
-                              <div key={t.id} className="flex justify-between border-b last:border-0 py-1">
-                                <div>
-                                  <p className="font-medium">{t.title}</p>
-                                  <p className="text-slate-500">
-                                    {TASK_LABELS[t.taskType]} • {OWNER_ROLE_LABELS[t.ownerRole]} • {t.ownerName}
-                                  </p>
-                                </div>
-                                <div className="text-right">
-                                  <p className="text-slate-500">Estado: {t.status}</p>
-                                  <button
-                                    onClick={() => completeTask(t.id)}
-                                    className="text-emerald-600 text-xs"
-                                  >
-                                    Marcar done
-                                  </button>
-                                </div>
-                              </div>
-                            ))
-                        ) : (
-                          <p className="text-slate-400">Sin tareas aún.</p>
-                        )}
-                      </div>
-                    </div>
-                    <div className="p-2 bg-white border rounded">
-                      <div className="flex justify-between items-center">
-                        <span className="font-semibold">Aplicar playbook</span>
-                        <div className="flex gap-2">
-                          <select
-                            value={selectedPlaybookId || playbooks[0]?.id || ''}
-                            onChange={(e) => setSelectedPlaybookId(e.target.value)}
-                            className="border rounded px-1 text-xs"
-                            disabled={!playbooks.length}
-                          >
-                            {playbooks.length ? (
-                              playbooks.map((pb) => (
-                                <option key={pb.id} value={pb.id}>
-                                  {pb.name} v{pb.version}
-                                </option>
-                              ))
-                            ) : (
-                              <option value="">Sin playbooks</option>
-                            )}
-                          </select>
-                          <button
-                            onClick={() => {
-                              const selected =
-                                playbooks.find((pb) => pb.id === (selectedPlaybookId || playbooks[0]?.id)) || playbooks[0];
-                              if (selected) applyPlaybookToClaim(selected, sel);
-                            }}
-                            className="px-2 py-0.5 bg-emerald-600 text-white rounded text-xs"
-                            disabled={!playbooks.length}
-                          >
-                            Aplicar
-                          </button>
-                        </div>
-                      </div>
-                      <p className="text-xs text-slate-500 mt-1">
-                        Aplica pasos y checklist del playbook al denial actual.
-                      </p>
-                    </div>
-                    <div className="p-2 bg-white border rounded">
-                      <div className="flex justify-between items-center">
-                        <span className="font-semibold">Vincular a prevención</span>
-                        <div className="flex gap-2">
-                          <select
-                            value={selectedIssueId}
-                            onChange={(e) => setSelectedIssueId(e.target.value)}
-                            className="border rounded px-1 text-xs"
-                          >
-                            <option value="">Selecciona issue</option>
-                            {preventionIssues.map((issue) => (
-                              <option key={issue.id} value={issue.id}>
-                                {issue.title}
-                              </option>
-                            ))}
-                          </select>
-                          <button
-                            onClick={() => {
-                              const issue = preventionIssues.find((item) => item.id === selectedIssueId);
-                              if (issue) linkIssueToClaim(issue.id, sel);
-                            }}
-                            className="px-2 py-0.5 border rounded text-xs"
-                          >
-                            Vincular
-                          </button>
-                          <button
-                            onClick={() => {
-                              const newIssue = createPreventionIssue({
-                                title: `Prevenir ${sel.code || 'denial'} ${sel.id}`,
-                                rootCauseCategory: sel.root_cause_bucket || sel.code || 'unknown',
-                                payersAffected: [sel.payer],
-                                reasonCodes: [sel.code || 'unknown'],
-                                impactEstimate: sel.amount || 0,
-                                ownerRole: 'coding',
-                                recommendation: 'Revisar proceso interno y actualizar checklist del equipo.',
-                                trend: 'up',
-                              });
-                              linkIssueToClaim(newIssue.id, sel);
-                            }}
-                            className="px-2 py-0.5 bg-emerald-600 text-white rounded text-xs"
-                          >
-                            Crear issue
-                          </button>
-                        </div>
-                      </div>
-                      <p className="text-xs text-slate-500 mt-1">
-                        Vincula el denial a un issue preventivo para evitar recurrencias.
-                      </p>
-                    </div>
-                    <div className="p-2 bg-white border rounded">
-                      <p className="font-semibold">Causa raíz y calidad</p>
-                      <div className="grid grid-cols-2 gap-2 mt-2 text-xs">
-                        <label className="text-slate-600">
-                          Categoría normalizada
-                          <select
-                            value={sel.denial_category_normalized || 'unknown'}
-                            onChange={(e) =>
-                              updateClaimFields(sel.id, { denial_category_normalized: e.target.value }, 'Categoría actualizada')
-                            }
-                            className="w-full border rounded p-1 mt-1"
-                          >
-                            {PLAYBOOK_CATEGORIES.map((cat) => (
-                              <option key={cat} value={cat}>
-                                {cat}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                        <label className="text-slate-600">
-                          Root cause bucket
-                          <input
-                            value={sel.root_cause_bucket || ''}
-                            onChange={(e) =>
-                              updateClaimFields(sel.id, { root_cause_bucket: e.target.value || 'unknown' }, 'Root cause actualizado')
-                            }
-                            placeholder="unknown"
-                            className="w-full border rounded p-1 mt-1"
-                          />
-                        </label>
-                        <label className="text-slate-600">
-                          Revisión clínica
-                          <select
-                            value={sel.clinical_review_required ? 'yes' : 'no'}
-                            onChange={(e) =>
-                              updateClaimFields(
-                                sel.id,
-                                { clinical_review_required: e.target.value === 'yes' },
-                                'Revisión clínica actualizada'
-                              )
-                            }
-                            className="w-full border rounded p-1 mt-1"
-                          >
-                            <option value="no">No</option>
-                            <option value="yes">Sí</option>
-                          </select>
-                        </label>
-                        <div className="text-slate-600">
-                          Campos de calidad faltantes
-                          <div className="mt-1 flex flex-wrap gap-2">
-                            {QUALITY_GAP_FLAGS.map((flag) => (
-                              <label key={flag} className="flex items-center gap-1">
-                                <input
-                                  type="checkbox"
-                                  checked={(sel.quality_gap_flags || []).includes(flag)}
-                                  onChange={(e) => {
-                                    const nextFlags = e.target.checked
-                                      ? [...(sel.quality_gap_flags || []), flag]
-                                      : (sel.quality_gap_flags || []).filter((item) => item !== flag);
-                                    updateClaimFields(sel.id, { quality_gap_flags: nextFlags }, 'Checklist de calidad actualizado');
-                                  }}
-                                />
-                                {flag}
-                              </label>
-                            ))}
+                  <div className="border-b bg-slate-50 px-2 py-1 flex gap-2 text-xs">
+                    {[
+                      ['summary', 'Resumen'],
+                      ['action', 'Acción'],
+                      ['evidence', 'Evidencia'],
+                      ['audit', 'Auditoría'],
+                    ].map(([tab, label]) => (
+                      <button
+                        key={tab}
+                        onClick={() => setDenialTab(tab)}
+                        className={`px-2 py-0.5 rounded ${denialTab === tab ? 'bg-emerald-600 text-white' : 'text-slate-600 hover:bg-slate-100'}`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="flex-1 overflow-auto p-2" id="denial-detail">
+                    {denialTab === 'summary' && (
+                      <div className="space-y-2">
+                        <div className="p-2 bg-slate-800 text-white rounded flex justify-between">
+                          <div>
+                            <p className="text-slate-400">Monto</p>
+                            <p className="text-lg font-bold">${sel.amount.toLocaleString()}</p>
+                          </div>
+                          <div className="text-right">
+                            <p className="text-slate-400">Prob</p>
+                            <p className="text-lg font-bold text-emerald-400">{sel.prob}%</p>
                           </div>
                         </div>
-                      </div>
-                    </div>
-                    <div className="p-1.5 bg-slate-50 rounded">
-                      <div className="flex items-center justify-between">
-                        <p className="font-semibold">Scoring</p>
-                        <span className="text-slate-400">{sel.scoringVersion}</span>
-                      </div>
-                      <p className="text-slate-600">
-                        Días: {sel.inputs.days} | Amt: {sel.inputs.amt} | Age: {sel.inputs.age} | Pen:{' '}
-                        {sel.inputs.pen}
-                      </p>
-                      <p className="text-slate-400 text-[10px]">
-                        Demo: fórmula basada en monto, antigüedad, reglas del pagador y tipo de denial.
-                      </p>
-                    </div>
-                    <div className="flex gap-1">
-                      <button
-                        id="tour-appeal"
-                        onClick={() => openAppealModal(sel)}
-                        className="flex-1 bg-emerald-600 text-white py-1 rounded hover:bg-emerald-700 flex items-center justify-center gap-1"
-                      >
-                        <FileText className="w-3 h-3" />
-                        Apelación
-                      </button>
-                      <button
-                        id="tour-status"
-                        onClick={() => updateStatus(sel.id, 'in_progress')}
-                        className="flex-1 bg-blue-600 text-white py-1 rounded hover:bg-blue-700 flex items-center justify-center gap-1"
-                      >
-                        <CheckCircle className="w-3 h-3" />
-                        En Proceso
-                      </button>
-                    </div>
-                    <div className="p-1.5 bg-slate-50 rounded text-slate-600">
-                      Enviado: {sel.submitted} • Denegado: {sel.denied}
-                    </div>
-                    <div className="p-2 bg-white border rounded">
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="font-semibold">Historial de Apelaciones</span>
-                        <span className="text-slate-400 text-xs">{sel.appeals.length}</span>
-                      </div>
-                      {sel.appeals.length ? (
-                        <div className="space-y-1">
-                          {sel.appeals.map((a) => (
-                            <div key={a.id} className="flex justify-between text-slate-600 text-xs bg-slate-50 p-1 rounded">
-                              <span>
-                                {a.id} • {a.status}
-                              </span>
-                              <span>{new Date(a.createdAt).toLocaleDateString()}</span>
+                        <div className="grid grid-cols-2 gap-1">
+                          {[
+                            ['Paciente', displayName(sel)],
+                            ['Pagador', sel.payer],
+                            ['Proveedor', sel.provider],
+                            ['Facility', sel.facility],
+                            ['CPT', sel.cpt],
+                            ['Dx', sel.dx],
+                          ].map(([label, value]) => (
+                            <div key={label} className="p-1 bg-slate-50 rounded">
+                              <p className="text-slate-500">{label}</p>
+                              <p className="font-medium">{value}</p>
                             </div>
                           ))}
                         </div>
-                      ) : (
-                        <p className="text-slate-400 text-xs">Sin apelaciones previas.</p>
-                      )}
-                    </div>
+                        <div className="p-1.5 bg-red-50 border border-red-200 rounded">
+                          <p className="font-semibold text-red-700">{sel.code}</p>
+                          <p className="text-red-800">{sel.reason}</p>
+                        </div>
+                        <div className="p-1.5 bg-slate-50 rounded">
+                          <div className="flex items-center justify-between">
+                            <p className="font-semibold">Scoring</p>
+                            <span className="text-slate-400">{sel.scoringVersion}</span>
+                          </div>
+                          <p className="text-slate-600">
+                            Días: {sel.inputs.days} | Amt: {sel.inputs.amt} | Age: {sel.inputs.age} | Pen: {sel.inputs.pen}
+                          </p>
+                          <p className="text-slate-400 text-[10px]">
+                            Demo: fórmula basada en monto, antigüedad, reglas del pagador y tipo de denial.
+                          </p>
+                        </div>
+                        <div className="p-1.5 bg-slate-50 rounded text-slate-600">
+                          Enviado: {sel.submitted} • Denegado: {sel.denied}
+                        </div>
+                      </div>
+                    )}
+                    {denialTab === 'action' && (
+                      <div className="space-y-2">
+                        <div className="p-1.5 bg-emerald-50 border border-emerald-200 rounded">
+                          <p className="font-semibold text-emerald-700">Acción recomendada</p>
+                          <p className="text-emerald-800">{sel.action}</p>
+                        </div>
+                        {triageResults[sel.id] ? (
+                          <div className="p-2 bg-white border rounded">
+                            <div className="flex justify-between items-center">
+                              <span className="font-semibold">Triage IA</span>
+                              <button
+                                onClick={() => applyTriage(sel.id)}
+                                className="px-2 py-0.5 bg-emerald-600 text-white rounded"
+                              >
+                                Aplicar sugerencias
+                              </button>
+                            </div>
+                            <p className="text-slate-600 mt-1">{triageResults[sel.id].suggested_action_short}</p>
+                            <ul className="text-slate-500 text-xs mt-1 list-disc list-inside">
+                              {triageResults[sel.id].suggested_action_steps.map((step) => (
+                                <li key={step}>{step}</li>
+                              ))}
+                            </ul>
+                            <p className="text-slate-400 text-xs mt-1">
+                              Docs sugeridos: {triageResults[sel.id].required_documents.join(', ')}
+                            </p>
+                            <p className="text-slate-400 text-xs mt-1">
+                              Recomendación de apelación: {triageResults[sel.id].appeal_recommended ? 'Sí' : 'No'} •{' '}
+                              {triageResults[sel.id].appeal_angle}
+                            </p>
+                          </div>
+                        ) : (
+                          <div className="p-2 bg-slate-50 border rounded text-slate-500 text-xs">
+                            Sin triage IA todavía. Sube un 277CA/835 en Data Intake para generar sugerencias.
+                          </div>
+                        )}
+                        <div className="p-2 bg-white border rounded">
+                          <div className="flex justify-between items-center">
+                            <span className="font-semibold">Work plan</span>
+                            <div className="flex gap-2">
+                              <select
+                                value={taskTypeDraft}
+                                onChange={(e) => setTaskTypeDraft(e.target.value)}
+                                className="border rounded px-1 text-xs"
+                              >
+                                {TASK_TYPES.map((type) => (
+                                  <option key={type} value={type}>
+                                    {TASK_LABELS[type]}
+                                  </option>
+                                ))}
+                              </select>
+                              <button
+                                onClick={() => createTaskForDenial(sel, taskTypeDraft, 'user')}
+                                className="px-2 py-0.5 border rounded text-xs"
+                              >
+                                Crear tarea
+                              </button>
+                              <button
+                                onClick={() => applySuggestedTasks(sel)}
+                                className="px-2 py-0.5 bg-emerald-600 text-white rounded text-xs"
+                              >
+                                Aplicar sugerencia
+                              </button>
+                            </div>
+                          </div>
+                          <div className="mt-2 space-y-1 text-xs">
+                            {tasks.filter((t) => t.claimId === sel.id).length ? (
+                              tasks
+                                .filter((t) => t.claimId === sel.id)
+                                .map((t) => (
+                                  <div key={t.id} className="flex justify-between border-b last:border-0 py-1">
+                                    <div>
+                                      <p className="font-medium">{t.title}</p>
+                                      <p className="text-slate-500">
+                                        {TASK_LABELS[t.taskType]} • {OWNER_ROLE_LABELS[t.ownerRole]} • {t.ownerName}
+                                      </p>
+                                    </div>
+                                    <div className="text-right">
+                                      <p className="text-slate-500">Estado: {t.status}</p>
+                                      <button onClick={() => completeTask(t.id)} className="text-emerald-600 text-xs">
+                                        Marcar done
+                                      </button>
+                                    </div>
+                                  </div>
+                                ))
+                            ) : (
+                              <p className="text-slate-400">Sin tareas aún.</p>
+                            )}
+                          </div>
+                        </div>
+                        <div className="p-2 bg-white border rounded">
+                          <p className="font-semibold">Causa raíz y calidad</p>
+                          <div className="grid grid-cols-2 gap-2 mt-2 text-xs">
+                            <label className="text-slate-600">
+                              Categoría normalizada
+                              <select
+                                value={sel.denial_category_normalized || 'unknown'}
+                                onChange={(e) =>
+                                  updateClaimFields(sel.id, { denial_category_normalized: e.target.value }, 'Categoría actualizada')
+                                }
+                                className="w-full border rounded p-1 mt-1"
+                              >
+                                {PLAYBOOK_CATEGORIES.map((cat) => (
+                                  <option key={cat} value={cat}>
+                                    {cat}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                            <label className="text-slate-600">
+                              Root cause bucket
+                              <input
+                                value={sel.root_cause_bucket || ''}
+                                onChange={(e) =>
+                                  updateClaimFields(sel.id, { root_cause_bucket: e.target.value || 'unknown' }, 'Root cause actualizado')
+                                }
+                                placeholder="unknown"
+                                className="w-full border rounded p-1 mt-1"
+                              />
+                            </label>
+                            <label className="text-slate-600">
+                              Revisión clínica
+                              <select
+                                value={sel.clinical_review_required ? 'yes' : 'no'}
+                                onChange={(e) =>
+                                  updateClaimFields(
+                                    sel.id,
+                                    { clinical_review_required: e.target.value === 'yes' },
+                                    'Revisión clínica actualizada'
+                                  )
+                                }
+                                className="w-full border rounded p-1 mt-1"
+                              >
+                                <option value="no">No</option>
+                                <option value="yes">Sí</option>
+                              </select>
+                            </label>
+                            <div className="text-slate-600">
+                              Campos de calidad faltantes
+                              <div className="mt-1 flex flex-wrap gap-2">
+                                {QUALITY_GAP_FLAGS.map((flag) => (
+                                  <label key={flag} className="flex items-center gap-1">
+                                    <input
+                                      type="checkbox"
+                                      checked={(sel.quality_gap_flags || []).includes(flag)}
+                                      onChange={(e) => {
+                                        const nextFlags = e.target.checked
+                                          ? [...(sel.quality_gap_flags || []), flag]
+                                          : (sel.quality_gap_flags || []).filter((item) => item !== flag);
+                                        updateClaimFields(sel.id, { quality_gap_flags: nextFlags }, 'Checklist de calidad actualizado');
+                                      }}
+                                    />
+                                    {flag}
+                                  </label>
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="flex gap-2">
+                          <button
+                            id="tour-appeal"
+                            onClick={() => openAppealModal(sel)}
+                            className="flex-1 bg-emerald-600 text-white py-1 rounded hover:bg-emerald-700 flex items-center justify-center gap-1"
+                          >
+                            <FileText className="w-3 h-3" />
+                            Generar borrador
+                          </button>
+                          <button
+                            id="tour-status"
+                            onClick={() => updateStatus(sel.id, 'in_progress')}
+                            className="flex-1 bg-blue-600 text-white py-1 rounded hover:bg-blue-700 flex items-center justify-center gap-1"
+                          >
+                            <CheckCircle className="w-3 h-3" />
+                            Marcar en proceso
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                    {denialTab === 'evidence' && (
+                      <div className="space-y-2">
+                        <div className="p-2 bg-white border rounded">
+                          <div className="flex justify-between items-center">
+                            <span className="font-semibold">Aplicar playbook</span>
+                            <div className="flex gap-2">
+                              <select
+                                value={selectedPlaybookId || playbooks[0]?.id || ''}
+                                onChange={(e) => setSelectedPlaybookId(e.target.value)}
+                                className="border rounded px-1 text-xs"
+                                disabled={!playbooks.length}
+                              >
+                                {playbooks.length ? (
+                                  playbooks.map((pb) => (
+                                    <option key={pb.id} value={pb.id}>
+                                      {pb.name} v{pb.version}
+                                    </option>
+                                  ))
+                                ) : (
+                                  <option value="">Sin playbooks</option>
+                                )}
+                              </select>
+                              <button
+                                onClick={() => {
+                                  const selected =
+                                    playbooks.find((pb) => pb.id === (selectedPlaybookId || playbooks[0]?.id)) || playbooks[0];
+                                  if (selected) applyPlaybookToClaim(selected, sel);
+                                }}
+                                className="px-2 py-0.5 bg-emerald-600 text-white rounded text-xs"
+                                disabled={!playbooks.length}
+                              >
+                                Aplicar
+                              </button>
+                            </div>
+                          </div>
+                          <p className="text-xs text-slate-500 mt-1">
+                            Aplica pasos y checklist del playbook al denial actual.
+                          </p>
+                        </div>
+                        <div className="p-2 bg-white border rounded">
+                          <div className="flex justify-between items-center">
+                            <span className="font-semibold">Vincular a prevención</span>
+                            <div className="flex gap-2">
+                              <select
+                                value={selectedIssueId}
+                                onChange={(e) => setSelectedIssueId(e.target.value)}
+                                className="border rounded px-1 text-xs"
+                              >
+                                <option value="">Selecciona issue</option>
+                                {preventionIssues.map((issue) => (
+                                  <option key={issue.id} value={issue.id}>
+                                    {issue.title}
+                                  </option>
+                                ))}
+                              </select>
+                              <button
+                                onClick={() => {
+                                  const issue = preventionIssues.find((item) => item.id === selectedIssueId);
+                                  if (issue) linkIssueToClaim(issue.id, sel);
+                                }}
+                                className="px-2 py-0.5 border rounded text-xs"
+                              >
+                                Vincular
+                              </button>
+                              <button
+                                onClick={() => {
+                                  const newIssue = createPreventionIssue({
+                                    title: `Prevenir ${sel.code || 'denial'} ${sel.id}`,
+                                    rootCauseCategory: sel.root_cause_bucket || sel.code || 'unknown',
+                                    payersAffected: [sel.payer],
+                                    reasonCodes: [sel.code || 'unknown'],
+                                    impactEstimate: sel.amount || 0,
+                                    ownerRole: 'coding',
+                                    recommendation: 'Revisar proceso interno y actualizar checklist del equipo.',
+                                    trend: 'up',
+                                  });
+                                  linkIssueToClaim(newIssue.id, sel);
+                                }}
+                                className="px-2 py-0.5 bg-emerald-600 text-white rounded text-xs"
+                              >
+                                Crear issue
+                              </button>
+                            </div>
+                          </div>
+                          <p className="text-xs text-slate-500 mt-1">
+                            Vincula el denial a un issue preventivo para evitar recurrencias.
+                          </p>
+                        </div>
+                        <div className="p-2 bg-white border rounded">
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="font-semibold">Historial de Apelaciones</span>
+                            <span className="text-slate-400 text-xs">{sel.appeals.length}</span>
+                          </div>
+                          {sel.appeals.length ? (
+                            <div className="space-y-1">
+                              {sel.appeals.map((a) => (
+                                <div key={a.id} className="flex justify-between text-slate-600 text-xs bg-slate-50 p-1 rounded">
+                                  <span>
+                                    {a.id} • {a.status}
+                                  </span>
+                                  <span>{new Date(a.createdAt).toLocaleDateString()}</span>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <p className="text-slate-400 text-xs">Sin apelaciones previas.</p>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                    {denialTab === 'audit' && (
+                      <div className="space-y-2">
+                        <div className="p-2 bg-white border rounded">
+                          <p className="font-semibold">Auditoría del caso</p>
+                          <div className="mt-2 space-y-1 text-xs">
+                            {audit.filter((entry) => entry.claimId === sel.id).length ? (
+                              audit
+                                .filter((entry) => entry.claimId === sel.id)
+                                .slice(0, 8)
+                                .map((entry) => (
+                                  <div key={entry.id} className="flex justify-between bg-slate-50 p-1 rounded">
+                                    <div>
+                                      <p className="font-medium">{entry.action}</p>
+                                      <p className="text-slate-500">{entry.detail}</p>
+                                    </div>
+                                    <span className="text-slate-400">{entry.ts}</span>
+                                  </div>
+                                ))
+                            ) : (
+                              <p className="text-slate-400">Sin eventos todavía para este denial.</p>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
