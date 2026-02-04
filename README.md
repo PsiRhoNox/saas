@@ -29,6 +29,7 @@ Si Hostinger marca “Unsupported framework or invalid project structure”, rev
 - **Raíz del repo**: `package.json`, `index.html` y `vite.config.js` deben estar en la raíz del repositorio.
 - **Rama correcta**: selecciona la rama que contiene el código (no solo README).
 - **Repositorio limpio**: no subas `node_modules` (ya está en `.gitignore`).
+- **Monorepo / backend opcional**: Hostinger solo debe ver el frontend. Este repo incluye un backend opcional; está excluido con `.hostingerignore`.
 
 Configuración recomendada en Hostinger:
 - **Build command**: `npm run build`
