@@ -36,6 +36,7 @@ Configuración recomendada en Hostinger:
 - **Start command**: `npm run start` (usa `PORT` del entorno)
 
 > Nota: en este demo `vite preview` reemplaza al servidor de producción. Si tu panel exige un servidor dedicado, puedes usar un adaptador externo, pero este setup funciona para demos.
+> Si Hostinger no detecta Vite, verifica que `vite` esté en `dependencies` (no solo en `devDependencies`).
 
 ## Plan por etapas
 1. **Hoy (MVP demo)**: Intake manual, cola priorizada, tareas y auditoría.
